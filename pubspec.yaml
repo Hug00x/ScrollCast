@@ -1,0 +1,75 @@
+name: scrollcast
+description: "PDF annotator with audio notes"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # PDF
+  pdfx: ^2.7.0
+  pdf: ^3.11.0
+  printing: ^5.12.0
+  photo_view: ^0.15.0
+
+  vector_math: ^2.1.4
+
+  # Firebase (compatíveis entre si)
+  firebase_core: ^2.25.5
+  firebase_auth: ^4.16.0
+  google_sign_in: ^6.2.1
+
+  # Ficheiros / paths
+  path_provider: ^2.1.5
+  path: ^1.9.0
+  file_picker: ^10.3.3
+
+  # Áudio
+  record: ^6.1.1
+  just_audio: ^0.10.5
+  audio_session: ^0.2.2
+
+  # Persistência
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # Util
+  uuid: ^4.5.0
+
+  # Splash
+  flutter_native_splash: ^2.4.1
+
+dev_dependencies:
+  flutter_launcher_icons: ^0.14.1
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/scrollcast.png
+    - assets/icon_delete.png
+    - assets/scrollcast_with_name.png
+
+# Só usa isto se o solver se queixar do package "web"
+# dependency_overrides:
+#   web: ^0.5.1
+
+flutter_native_splash:
+  color: "#0B1A24"
+  image: assets/scrollcast.png
+  android_12:
+    color: "#0B1A24"
+    image: assets/scrollcast.png
+
+flutter_launcher_icons:
+  android: true
+  image_path: "assets/scrollcast.png"
+  adaptive_icon_foreground: "assets/scrollcast.png"
+  adaptive_icon_background: "#0B1A24"

@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "792190640551",
+    "project_id": "scrollcast-50a8d",
+    "storage_bucket": "scrollcast-50a8d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:792190640551:android:6f5b70811cfe921f621682",
+        "android_client_info": {
+          "package_name": "com.example.scrollcast"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "792190640551-qve54om6m8357qq5m09l62va5mtmlk7l.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.scrollcast",
+            "certificate_hash": "d601c326060c94b677f5115617e12fb2f7ac799c"
+          }
+        },
+        {
+          "client_id": "792190640551-8pul1l5plpnpc4vufdalbqelkldor5mv.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDRln20ZCBUfzEGVpJBt_R_i6FDqERhfJ8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "792190640551-8pul1l5plpnpc4vufdalbqelkldor5mv.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
