@@ -78,6 +78,7 @@ class _TextNoteBubbleState extends State<TextNoteBubble> {
           // “três traços” pretos (coerente com o design do áudio)
           child: const Icon(Icons.notes_rounded, size: 18, color: Colors.black87),
         ),
+        
       ),
     );
   }

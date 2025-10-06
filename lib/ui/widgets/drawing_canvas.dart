@@ -13,6 +13,12 @@ class DrawingCanvas extends StatefulWidget {
   final StrokeEnd onStrokeEnd;
   final PointerCountChanged? onPointerCountChanged;
 
+  // raio visual da borracha (recebe do toolbar)
+  final double? eraserWidthPreview;
+
+  // >>> NOVO: avisa o pai quando a borracha modificar os traços
+  final VoidCallback? onStrokesChanged;
+
   const DrawingCanvas({
     super.key,
     required this.strokes,
@@ -21,6 +27,8 @@ class DrawingCanvas extends StatefulWidget {
     required this.strokeColor,
     required this.onStrokeEnd,
     this.onPointerCountChanged,
+    this.eraserWidthPreview,
+    this.onStrokesChanged, // NOVO
   });
 
   @override
@@ -31,21 +39,31 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   final _activePoints = <int, Offset>{}; // pointer -> pos
   final _currentLine = <Offset>[];
 
-  // borracha
-  static const double _eraserRadius = 18;
+  // preview da borracha
+  Offset? _eraserCenter;
+
+  // raio base (caso não venha do toolbar)
+  static const double _fallbackEraserRadius = 18;
 
   void _notifyCount() => widget.onPointerCountChanged?.call(_activePoints.length);
 
   @override
   Widget build(BuildContext context) {
+    final isEraser = widget.mode == StrokeMode.eraser;
+
     return Listener(
       onPointerDown: (e) {
         _activePoints[e.pointer] = e.localPosition;
         _notifyCount();
-        if (_activePoints.length == 1 && widget.mode != StrokeMode.eraser) {
-          _currentLine
-            ..clear()
-            ..add(e.localPosition);
+
+        if (_activePoints.length == 1) {
+          if (isEraser) {
+            _eraserCenter = e.localPosition;
+          } else {
+            _currentLine
+              ..clear()
+              ..add(e.localPosition);
+          }
           setState(() {});
         }
       },
@@ -53,11 +71,10 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         _activePoints[e.pointer] = e.localPosition;
 
         if (_activePoints.length == 1) {
-          if (widget.mode == StrokeMode.eraser) {
-            // apaga segmentos por proximidade
-            _eraseAt(e.localPosition);
+          if (isEraser) {
+            _eraserCenter = e.localPosition;
+            _eraseAt(e.localPosition); // pode disparar onStrokesChanged
           } else {
-            // desenhar em tempo real
             _currentLine.add(e.localPosition);
           }
           setState(() {});
@@ -70,7 +87,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         _activePoints.remove(e.pointer);
         _notifyCount();
 
-        if (_currentLine.length > 1 && widget.mode != StrokeMode.eraser) {
+        if (_currentLine.length > 1 && !isEraser) {
           final stroke = Stroke(
             points: List<Offset>.from(_currentLine),
             width: widget.mode == StrokeMode.highlighter ? widget.strokeWidth * 1.35 : widget.strokeWidth,
@@ -83,10 +100,12 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
           _currentLine.clear();
           setState(() {});
         }
+        _eraserCenter = null;
       },
       onPointerCancel: (e) {
         _activePoints.remove(e.pointer);
         _currentLine.clear();
+        _eraserCenter = null;
         _notifyCount();
         setState(() {});
       },
@@ -94,38 +113,45 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         painter: _CanvasPainter(
           strokes: widget.strokes,
           previewLine: _currentLine,
-          eraserRadius: widget.mode == StrokeMode.eraser ? _eraserRadius : 0,
+          previewColor: widget.strokeColor,
+          previewWidth: widget.strokeWidth,
+          eraserCenter: _eraserCenter,
+          eraserRadius: (widget.eraserWidthPreview ?? _fallbackEraserRadius),
+          showEraser: isEraser,
         ),
       ),
     );
   }
 
   void _eraseAt(Offset where) {
-    // remove segmentos “near” a 'where'
+    final radius = (widget.eraserWidthPreview ?? _fallbackEraserRadius);
+    bool anyChange = false;
+
     for (int i = widget.strokes.length - 1; i >= 0; i--) {
       final s = widget.strokes[i];
-      // só apaga se não for marca-texto (senão ficava estranho).
-      if (s.mode == StrokeMode.highlighter || s.points.length < 2) continue;
+      if (s.points.length < 2) continue;
 
       final newPoints = <Offset>[];
+      bool cut = false;
+
       for (int j = 0; j < s.points.length - 1; j++) {
         final a = s.points[j];
         final b = s.points[j + 1];
-        // distância ponto-segmento
         final d = _distancePointToSegment(where, a, b);
-        if (d > _eraserRadius) {
+
+        if (d > radius) {
           newPoints.add(a);
         } else {
-          // corta aqui: se houver bloco antes, substitui stroke por dois
+          // corta aqui
+          cut = true;
+          anyChange = true;
           if (newPoints.length >= 2) {
-            final kept = Stroke(
+            widget.strokes[i] = Stroke(
               points: List<Offset>.from(newPoints),
               width: s.width,
               color: s.color,
               mode: s.mode,
             );
-            widget.strokes[i] = kept;
-            // e duplica o resto noutro stroke
             final rest = s.points.sublist(j + 1);
             if (rest.length >= 2) {
               widget.strokes.insert(
@@ -133,22 +159,29 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 Stroke(points: rest, width: s.width, color: s.color, mode: s.mode),
               );
             }
-            return;
           } else {
-            // nada antes: só fica o resto
             final rest = s.points.sublist(j + 1);
             if (rest.length >= 2) {
               widget.strokes[i] = Stroke(points: rest, width: s.width, color: s.color, mode: s.mode);
             } else {
               widget.strokes.removeAt(i);
             }
-            return;
           }
+          break;
         }
       }
-      // se passou o loop e nada foi apagado, manter o último ponto
-      newPoints.add(s.points.last);
-      widget.strokes[i] = Stroke(points: newPoints, width: s.width, color: s.color, mode: s.mode);
+
+      if (!cut) {
+        // não houve corte no meio: manter último ponto (ainda assim altera o stroke)
+        newPoints.add(s.points.last);
+        widget.strokes[i] = Stroke(points: newPoints, width: s.width, color: s.color, mode: s.mode);
+        anyChange = true;
+      }
+    }
+
+    if (anyChange) {
+      // avisa o pai para persistir no storage (evita perder ao voltar)
+      widget.onStrokesChanged?.call();
     }
   }
 
@@ -166,16 +199,27 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 class _CanvasPainter extends CustomPainter {
   final List<Stroke> strokes;
   final List<Offset> previewLine;
+  final int previewColor;
+  final double previewWidth;
+
+  // pré-visualização borracha
+  final bool showEraser;
+  final Offset? eraserCenter;
   final double eraserRadius;
 
   _CanvasPainter({
     required this.strokes,
     required this.previewLine,
+    required this.previewColor,
+    required this.previewWidth,
+    required this.showEraser,
+    required this.eraserCenter,
     required this.eraserRadius,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // strokes finalizados
     for (final s in strokes) {
       if (s.points.length < 2) continue;
       final p = Paint()
@@ -189,25 +233,30 @@ class _CanvasPainter extends CustomPainter {
       }
     }
 
+    // traço em tempo real
     if (previewLine.length >= 2) {
       final p = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
-        ..strokeWidth = strokes.isNotEmpty ? strokes.last.width : 3
-        ..color = const Color(0xFF00FF00);
+        ..strokeWidth = previewWidth
+        ..color = Color(previewColor);
       for (int i = 0; i < previewLine.length - 1; i++) {
         canvas.drawLine(previewLine[i], previewLine[i + 1], p);
       }
     }
 
-    if (eraserRadius > 0) {
-      final stroke = Paint()
+    // preview da borracha
+    if (showEraser && eraserCenter != null) {
+      final fill = Paint()
+        ..style = PaintingStyle.fill
+        ..color = const Color(0x22000000);
+      final ring = Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.5
-        ..color = const Color(0x80FFFFFF);
-      // opcional: desenhar o “cursor” de borracha se quiseres
-      // canvas.drawCircle(cursor, eraserRadius, stroke);
+        ..color = const Color(0xA0FFFFFF);
+      canvas.drawCircle(eraserCenter!, eraserRadius, fill);
+      canvas.drawCircle(eraserCenter!, eraserRadius, ring);
     }
   }
 
@@ -215,5 +264,9 @@ class _CanvasPainter extends CustomPainter {
   bool shouldRepaint(covariant _CanvasPainter old) =>
       old.strokes != strokes ||
       old.previewLine != previewLine ||
+      old.previewColor != previewColor ||
+      old.previewWidth != previewWidth ||
+      old.showEraser != showEraser ||
+      old.eraserCenter != eraserCenter ||
       old.eraserRadius != eraserRadius;
 }

@@ -44,6 +44,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   StrokeMode _mode = StrokeMode.pen;
   double _width = 4;
   int _color = 0xFF00FF00;
+  double _eraserWidth = 18;
 
   final _ivController = TransformationController();
   bool _canvasIgnore = false;
@@ -121,14 +122,16 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     setState(() => _pageIndex = i);
   }
 
-  void _onUndo() {
+  Future<void> _onUndo() async {
     if (_strokes.isEmpty) return;
     setState(() => _undo.add(_strokes.removeLast()));
+    await _savePage();
   }
 
-  void _onRedo() {
+  Future<void> _onRedo() async {
     if (_undo.isEmpty) return;
     setState(() => _strokes.add(_undo.removeLast()));
+    await _savePage();
   }
 
   Future<void> _exportPdf() async {
@@ -227,7 +230,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
               tooltip: 'Anterior',
             ),
 
-            // Toggle Mão/Desenhar — AGORA AQUI EM BAIXO
+            // Toggle Mão/Desenhar — em baixo
             Tooltip(
               message: _handMode ? 'Modo mão (arrastar) ativo' : 'Ativar modo mão',
               child: IconButton.filledTonal(
@@ -272,6 +275,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
               onColorChanged: (c) => setState(() => _color = c),
               onUndo: _onUndo,
               onRedo: _onRedo,
+              eraserWidth: _eraserWidth,
+              onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
             ),
           ),
 
@@ -333,31 +338,33 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                       final ignore = _handMode || count >= 2;
                                       if (ignore != _canvasIgnore) setState(() => _canvasIgnore = ignore);
                                     },
+                                    eraserWidthPreview: _eraserWidth,
+                                    // >>> NOVO: salva quando a borracha altera os traços
+                                    onStrokesChanged: () async {
+                                      await _savePage();
+                                    },
                                   ),
                                 ),
                               ),
 
                               // Pinos de áudio
-                             // ...
-Positioned.fill(
-  child: AudioPinLayer(
-    notes: _audioNotes,
-    scale: _currentScale.clamp(0.6, 4.0),
-    onMove: (idx, pos) async {
-      setState(() => _audioNotes[idx] = _audioNotes[idx].copyWith(position: pos));
-      await _savePage();
-    },
-    onDelete: (idx) async {
-      setState(() => _audioNotes.removeAt(idx));
-      await _savePage();
-    },
-    overlay: Overlay.of(context), // <- NOVO
-  ),
-),
-// ...
+                              Positioned.fill(
+                                child: AudioPinLayer(
+                                  notes: _audioNotes,
+                                  scale: _currentScale.clamp(0.6, 4.0),
+                                  onMove: (idx, pos) async {
+                                    setState(() => _audioNotes[idx] = _audioNotes[idx].copyWith(position: pos));
+                                    await _savePage();
+                                  },
+                                  onDelete: (idx) async {
+                                    setState(() => _audioNotes.removeAt(idx));
+                                    await _savePage();
+                                  },
+                                  overlay: Overlay.of(context), // mantém a folha livre
+                                ),
+                              ),
 
-
-                              // Pins de notas de texto (agora só o círculo)
+                              // Pins de notas de texto
                               ..._textNotes.indexed.map((entry) {
                                 final idx = entry.$1;
                                 final note = entry.$2;
@@ -375,9 +382,8 @@ Positioned.fill(
                                 );
                               }),
 
-                              // Painel flutuante quando uma nota está aberta
+                              // Painel flutuante da nota de texto
                               if (_openedNoteIndex != null) ...[
-                                // Tap fora fecha
                                 Positioned.fill(
                                   child: GestureDetector(
                                     onTap: () => setState(() => _openedNoteIndex = null),

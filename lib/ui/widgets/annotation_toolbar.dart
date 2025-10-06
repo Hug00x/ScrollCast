@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import '../../models/annotations.dart';
 
 class AnnotationToolbar extends StatelessWidget {
@@ -12,6 +13,8 @@ class AnnotationToolbar extends StatelessWidget {
     required this.onColorChanged,
     this.onUndo,
     this.onRedo,
+    required this.eraserWidth,
+    required this.onEraserWidthChanged,
   });
 
   final StrokeMode mode;
@@ -26,9 +29,37 @@ class AnnotationToolbar extends StatelessWidget {
   final VoidCallback? onUndo;
   final VoidCallback? onRedo;
 
+  final double eraserWidth;
+  final ValueChanged<double> onEraserWidthChanged;
+
+  Future<void> _pickColor(BuildContext context) async {
+    Color temp = Color(color);
+    final picked = await showDialog<Color>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Escolher cor'),
+        content: SingleChildScrollView(
+          child: ColorPicker(
+            pickerColor: temp,
+            onColorChanged: (c) => temp = c,
+            enableAlpha: false,
+            portraitOnly: true,
+            pickerAreaBorderRadius: const BorderRadius.all(Radius.circular(12)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, temp), child: const Text('OK')),
+        ],
+      ),
+    );
+    if (picked != null) onColorChanged(picked.value);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isEraser = mode == StrokeMode.eraser;
 
     return Material(
       color: Colors.transparent,
@@ -41,62 +72,65 @@ class AnnotationToolbar extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Linha 1: modos + undo/redo
-            Row(
-              children: [
-                _ModeButton(
-                  selected: mode == StrokeMode.pen,
-                  icon: Icons.brush_rounded,
-                  label: 'Desenhar',
-                  onTap: () => onModeChanged(StrokeMode.pen),
-                ),
-                const SizedBox(width: 8),
-                _ModeButton(
-                  selected: mode == StrokeMode.eraser,
-                  icon: Icons.auto_fix_off_rounded,
-                  label: 'Borracha',
-                  onTap: () => onModeChanged(StrokeMode.eraser),
-                ),
-                const SizedBox(width: 12),
-                IconButton(
-                  tooltip: 'Anular',
-                  onPressed: onUndo,
-                  icon: const Icon(Icons.undo_rounded),
-                ),
-                IconButton(
-                  tooltip: 'Refazer',
-                  onPressed: onRedo,
-                  icon: const Icon(Icons.redo_rounded),
-                ),
-                const Spacer(),
-                // espelho da cor e espessura atuais
-                _StrokePreview(color: color, width: width),
-              ],
+            // LINHA 1 — modos + undo/redo + preview (com scroll horizontal p/ evitar overflow)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const BouncingScrollPhysics(),
+              child: Row(
+                children: [
+                  _ModeButton(
+                    selected: mode == StrokeMode.pen,
+                    icon: Icons.brush_rounded,
+                    label: 'Desenhar',
+                    onTap: () => onModeChanged(StrokeMode.pen),
+                  ),
+                  const SizedBox(width: 8),
+                  _ModeButton(
+                    selected: isEraser,
+                    icon: Icons.auto_fix_off_rounded,
+                    label: 'Borracha',
+                    onTap: () => onModeChanged(StrokeMode.eraser),
+                  ),
+                  const SizedBox(width: 12),
+                  IconButton(
+                    tooltip: 'Anular',
+                    onPressed: onUndo,
+                    icon: const Icon(Icons.undo_rounded),
+                  ),
+                  IconButton(
+                    tooltip: 'Refazer',
+                    onPressed: onRedo,
+                    icon: const Icon(Icons.redo_rounded),
+                  ),
+                  const SizedBox(width: 8),
+                ],
+              ),
             ),
 
             const SizedBox(height: 8),
 
-            // Linha 2: paleta de cores
-            _ColorPalette(
+            // LINHA 2 — paleta + botão do espectro JUNTOS
+            _ColorPaletteWithPicker(
               selected: color,
               onChanged: onColorChanged,
+              onPickMore: () => _pickColor(context),
             ),
 
             const SizedBox(height: 4),
 
-            // Linha 3: espessura
+            // LINHA 3 — espessura (pincel/borracha)
             Row(
               children: [
                 const Icon(Icons.horizontal_rule_rounded, size: 18),
                 Expanded(
                   child: Slider(
-                    value: width.clamp(1, 24),
+                    value: (isEraser ? eraserWidth : width).clamp(1, 48),
                     min: 1,
-                    max: 24,
-                    onChanged: onWidthChanged,
+                    max: 48,
+                    onChanged: isEraser ? onEraserWidthChanged : onWidthChanged,
                   ),
                 ),
-                const Icon(Icons.format_size_rounded, size: 18),
+                const Icon(Icons.add_rounded, size: 18),
               ],
             ),
           ],
@@ -129,12 +163,11 @@ class _ModeButton extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
           color: selected ? scheme.primary.withOpacity(0.15) : Colors.transparent,
-          border: Border.all(
-            color: selected ? scheme.primary : scheme.outlineVariant,
-          ),
+          border: Border.all(color: selected ? scheme.primary : scheme.outlineVariant),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
             Icon(icon, size: 18, color: selected ? scheme.primary : scheme.onSurfaceVariant),
             const SizedBox(width: 6),
@@ -152,35 +185,64 @@ class _ModeButton extends StatelessWidget {
   }
 }
 
-class _ColorPalette extends StatelessWidget {
-  const _ColorPalette({
+/// Paleta de cores + botão de espectro na mesma fila.
+class _ColorPaletteWithPicker extends StatelessWidget {
+  const _ColorPaletteWithPicker({
     required this.selected,
     required this.onChanged,
+    required this.onPickMore,
   });
 
   final int selected;
   final ValueChanged<int> onChanged;
+  final VoidCallback onPickMore;
 
   // Paleta “ScrollCast”
- static const _colors = <int>[
-  0xFFE53935, // vermelho forte → alertas, urgência
-  0xFFFB8C00, // laranja vivo → categorias principais
-  0xFFFDD835, // amarelo limão → destaques
-  0xFF43A047, // verde vibrante → tarefas feitas
-  0xFF00ACC1, // azul ciano → links, referências
-  0xFF8E24AA, // roxo elétrico → extras, abstrações
-  0xFF000000, // preto → texto base
-  0xFFFFFFFF, // branco → contraste em dark mode
-];
+  static const _colors = <int>[
+    0xFFE53935, // vermelho
+    0xFFFB8C00, // laranja
+    0xFFFDD835, // amarelo
+    0xFF43A047, // verde
+    0xFF00ACC1, // ciano
+    0xFF8E24AA, // roxo
+    0xFF000000, // preto
+    0xFFFFFFFF, // branco
+  ];
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+
     return SizedBox(
       height: 36,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.only(right: 4),
         itemBuilder: (_, i) {
+          // último “item virtual” é o botão de espectro
+          if (i == _colors.length) {
+            return Tooltip(
+              message: 'Mais cores…',
+              child: InkWell(
+                onTap: onPickMore,
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [Color(selected), Color(selected).withOpacity(.7)],
+                    ),
+                    border: Border.all(color: scheme.onSurface.withOpacity(.15)),
+                  ),
+                  child: const Icon(Icons.palette_rounded, size: 18),
+                ),
+              ),
+            );
+          }
+
           final c = _colors[i];
           final isSel = c == selected;
           return GestureDetector(
@@ -200,7 +262,7 @@ class _ColorPalette extends StatelessWidget {
           );
         },
         separatorBuilder: (_, __) => const SizedBox(width: 10),
-        itemCount: _colors.length,
+        itemCount: _colors.length + 1, // +1 para o botão de espectro
       ),
     );
   }
@@ -213,17 +275,16 @@ class _StrokePreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final w = width.clamp(1, 24);
+    final double w = width.clamp(1, 48).toDouble();
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
-        Text('${w.toInt()}px', style: Theme.of(context).textTheme.labelSmall),
         const SizedBox(width: 8),
-        Container(
+        SizedBox(
           width: 48,
           height: 20,
-          alignment: Alignment.centerLeft,
           child: CustomPaint(
-            painter: _StrokeDemoPainter(Color(color), w.toDouble()),
+            painter: _StrokeDemoPainter(Color(color), w),
           ),
         ),
       ],
