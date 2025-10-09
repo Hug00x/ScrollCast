@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show MatrixUtils;
 
 import '../widgets/text_note_bubble.dart';
-import '../widgets/draggable_note_panel.dart';
+// import '../widgets/draggable_note_panel.dart'; // ⬅️ já não usamos
 import '../../main.dart';
 import '../../models/annotations.dart';
 import '../widgets/drawing_canvas.dart';
@@ -53,21 +53,24 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   bool _handMode = false;
   bool _loading = true;
 
-  // painel flutuante de notas
+  // painel de nota (agora: painel inferior fixo)
   int? _openedNoteIndex;
-  final Map<int, Offset> _notePanelPos = {};
+  final _noteEditor = TextEditingController();
 
-  // ⬇️ NOVO: chave e rect global da área do papel
+  // medir a área do “papel” (para Audio HUD bounds)
   final GlobalKey _paperKey = GlobalKey();
-  Rect? _paperRect; // em coordenadas globais (tela)
-
-  // valores aproximados do painel (para clamp)
-  static const Size _kNotePanelSize = Size(280, 200);
+  Rect? _paperRect;
 
   @override
   void initState() {
     super.initState();
     _initDoc();
+  }
+
+  @override
+  void dispose() {
+    _noteEditor.dispose();
+    super.dispose();
   }
 
   Future<void> _initDoc() async {
@@ -105,19 +108,17 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     _currentScale = 1.0;
     _handMode = false;
     _canvasIgnore = false;
-    _openedNoteIndex = null;
-    _notePanelPos.clear();
 
-    // Atualiza rect do papel no próximo frame
+    // fecha painel de nota
+    _openedNoteIndex = null;
+    _noteEditor.clear();
+
     WidgetsBinding.instance.addPostFrameCallback((_) => _updatePaperRect());
   }
 
-  // ⬇️ NOVO: calcula o rect global da área do papel
   void _updatePaperRect() {
     final ctx = _paperKey.currentContext;
-    final overlay = Overlay.of(context);
-    if (ctx == null || overlay == null) return;
-    final rb = ctx.findRenderObject() as RenderBox?;
+    final rb = ctx?.findRenderObject() as RenderBox?;
     if (rb == null) return;
     final topLeft = rb.localToGlobal(Offset.zero);
     final size = rb.size;
@@ -208,19 +209,35 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     await _savePage();
   }
 
-  // ⬇️ NOVO: clamp posição de painel à caixa do papel
-  Offset _clampToPaper(Offset desired, Size widgetSize) {
-    final r = _paperRect;
-    if (r == null) return desired;
-    final pad = 8.0;
-    final minX = r.left + pad;
-    final maxX = r.right - pad - widgetSize.width;
-    final minY = r.top + pad;
-    final maxY = r.bottom - pad - widgetSize.height;
-    return Offset(
-      desired.dx.clamp(minX, maxX).toDouble(),
-      desired.dy.clamp(minY, maxY).toDouble(),
-    );
+  // abrir/fechar painel
+  void _openNoteSheet(int index) {
+    _openedNoteIndex = index;
+    _noteEditor.text = _textNotes[index].text;
+    setState(() {});
+  }
+
+  void _closeNoteSheet() {
+    _openedNoteIndex = null;
+    _noteEditor.clear();
+    setState(() {});
+  }
+
+  Future<void> _deleteOpenedNote() async {
+    if (_openedNoteIndex == null) return;
+    final i = _openedNoteIndex!;
+    setState(() {
+      _textNotes.removeAt(i);
+      _openedNoteIndex = null;
+    });
+    await _savePage();
+  }
+
+  Future<void> _applyNoteText(String v) async {
+    if (_openedNoteIndex == null) return;
+    final i = _openedNoteIndex!;
+    final n = _textNotes[i];
+    setState(() => _textNotes[i] = TextNote(position: n.position, text: v.trim()));
+    await _savePage();
   }
 
   @override
@@ -231,6 +248,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
 
     final canPrev = _pageIndex > 0;
     final canNext = _pageIndex < _pageCount - 1;
+    final sheetOpen = _openedNoteIndex != null;
 
     return Scaffold(
       appBar: AppBar(
@@ -268,7 +286,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
               icon: const Icon(Icons.chevron_left),
               tooltip: 'Anterior',
             ),
-
             Tooltip(
               message: _handMode ? 'Modo mão (arrastar) ativo' : 'Ativar modo mão',
               child: IconButton.filledTonal(
@@ -281,13 +298,11 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                 icon: Icon(_handMode ? Icons.pan_tool_alt : Icons.brush),
               ),
             ),
-
             IconButton.filledTonal(
               tooltip: 'Nova nota de texto',
               onPressed: () => _createTextNote(context),
               icon: const Icon(Icons.notes_rounded),
             ),
-
             const Spacer(),
             IconButton(
               onPressed: canNext ? () => _goTo(_pageIndex + 1) : null,
@@ -300,6 +315,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
 
       body: Stack(
         children: [
+          // CONTEÚDO
           Column(
             children: [
               Padding(
@@ -317,7 +333,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                   onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
                 ),
               ),
-
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
@@ -335,7 +350,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                           onInteractionUpdate: (_) {
                             _currentScale = _ivController.value.getMaxScaleOnAxis();
                             setState(() {});
-                            // atualiza também o rect do papel (pode mudar com layout)
                             WidgetsBinding.instance.addPostFrameCallback((_) => _updatePaperRect());
                           },
                           child: FittedBox(
@@ -347,10 +361,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                 maxHeight: constraints.maxHeight,
                               ),
                               child: Stack(
-                                key: _paperKey, // ⬅️ mede a área do papel
+                                key: _paperKey,
                                 children: [
                                   Center(child: Image.memory(_pageBytes!, gaplessPlayback: true)),
-
                                   Positioned.fill(
                                     child: LayoutBuilder(
                                       builder: (_, c2) {
@@ -359,7 +372,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                       },
                                     ),
                                   ),
-
                                   Positioned.fill(
                                     child: IgnorePointer(
                                       ignoring: _handMode || _canvasIgnore,
@@ -384,8 +396,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                       ),
                                     ),
                                   ),
-
-                                  // Pinos de áudio — HUD confinado ao papel
+                                  // Áudio HUD limitado ao papel
                                   Positioned.fill(
                                     child: AudioPinLayer(
                                       notes: _audioNotes,
@@ -399,11 +410,10 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                         await _savePage();
                                       },
                                       overlay: Overlay.of(context),
-                                      allowedBounds: _paperRect, // ⬅️ NOVO
+                                      allowedBounds: _paperRect,
                                     ),
                                   ),
-
-                                  // Pins de notas de texto
+                                  // Pinos das notas — agora abrem painel inferior
                                   ..._textNotes.indexed.map((entry) {
                                     final idx = entry.$1;
                                     final note = entry.$2;
@@ -415,21 +425,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                         setState(() => _textNotes[idx] = updated);
                                         await _savePage();
                                       },
-                                      onOpen: () {
-                                        setState(() {
-                                          _openedNoteIndex = idx;
-                                          _notePanelPos.putIfAbsent(
-                                            idx,
-                                            () {
-                                              // posição inicial “dentro do papel”
-                                              final r = _paperRect;
-                                              if (r == null) return const Offset(24, kToolbarHeight + 24);
-                                              final start = Offset(r.left + 24, r.top + 24);
-                                              return _clampToPaper(start, _kNotePanelSize);
-                                            },
-                                          );
-                                        });
-                                      },
+                                      onOpen: () => _openNoteSheet(idx),
                                     );
                                   }),
                                 ],
@@ -445,54 +441,99 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
             ],
           ),
 
-          // Painel flutuante (fora do InteractiveViewer), mas limitado ao papel
-          if (_openedNoteIndex != null) ...[
-            Positioned.fill(
-              child: GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onTap: () => setState(() => _openedNoteIndex = null),
-                child: const SizedBox.shrink(),
+          // PAINEL INFERIOR DA NOTA (fixo acima da bottom bar)
+          _NoteBottomSheet(
+            visible: sheetOpen,
+            controller: _noteEditor,
+            onChanged: _applyNoteText,
+            onClose: _closeNoteSheet,
+            onDelete: _deleteOpenedNote,
+            bottomBarHeight: 64, // igual ao BottomAppBar.height
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Pequeno painel “colado” acima da BottomAppBar, com animação de slide.
+class _NoteBottomSheet extends StatelessWidget {
+  const _NoteBottomSheet({
+    required this.visible,
+    required this.controller,
+    required this.onChanged,
+    required this.onClose,
+    required this.onDelete,
+    required this.bottomBarHeight,
+  });
+
+  final bool visible;
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClose;
+  final Future<void> Function() onDelete;
+  final double bottomBarHeight;
+
+  @override
+  Widget build(BuildContext context) {
+    final pad = MediaQuery.of(context).padding.bottom;
+    final base = Theme.of(context).colorScheme;
+    final height = 140.0;
+
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: AnimatedSlide(
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        offset: visible ? Offset.zero : const Offset(0, 1.2),
+        child: Padding(
+          padding: EdgeInsets.only(bottom: bottomBarHeight + pad + 8, left: 8, right: 8),
+          child: Material(
+            elevation: 12,
+            borderRadius: BorderRadius.circular(16),
+            color: base.surface,
+            child: SizedBox(
+              height: height,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                child: Column(
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.sticky_note_2_outlined, size: 18),
+                        const SizedBox(width: 6),
+                        const Expanded(child: Text('Nota', style: TextStyle(fontWeight: FontWeight.w600))),
+                        IconButton(
+                          tooltip: 'Apagar',
+                          onPressed: () async => await onDelete(),
+                          icon: const Icon(Icons.delete_outline_rounded),
+                        ),
+                        IconButton(
+                          tooltip: 'Fechar',
+                          onPressed: onClose,
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        maxLines: null,
+                        onChanged: onChanged,
+                        decoration: const InputDecoration(
+                          hintText: 'Escreve a tua nota…',
+                          border: OutlineInputBorder(),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-
-            Builder(
-              builder: (_) {
-                final current = _notePanelPos[_openedNoteIndex!] ?? const Offset(24, kToolbarHeight + 24);
-                final clamped = _clampToPaper(current, _kNotePanelSize); // ⬅️ aplica limites
-                return Positioned(
-                  left: clamped.dx,
-                  top: clamped.dy,
-                  child: DraggableNotePanel(
-                    key: ValueKey('panel-$_openedNoteIndex-$_pageIndex'),
-                    note: _textNotes[_openedNoteIndex!],
-                    initialPosition: clamped,
-                    onPositionChanged: (pos) {
-                      // sempre clamp ao mover
-                      _notePanelPos[_openedNoteIndex!] = _clampToPaper(pos, _kNotePanelSize);
-                      setState(() {});
-                    },
-                    onTextChanged: (txt) async {
-                      final i = _openedNoteIndex!;
-                      final n = _textNotes[i];
-                      setState(() => _textNotes[i] = TextNote(position: n.position, text: txt));
-                      await _savePage();
-                    },
-                    onDelete: () async {
-                      final i = _openedNoteIndex!;
-                      setState(() {
-                        _textNotes.removeAt(i);
-                        _notePanelPos.remove(i);
-                        _openedNoteIndex = null;
-                      });
-                      await _savePage();
-                    },
-                    onClose: () => setState(() => _openedNoteIndex = null),
-                  ),
-                );
-              },
-            ),
-          ],
-        ],
+          ),
+        ),
       ),
     );
   }
