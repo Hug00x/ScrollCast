@@ -1,11 +1,12 @@
+// lib/ui/screens/library_screen.dart
+import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../main.dart';
 import '../../models/pdf_document_model.dart';
-import 'pdf_viewer_screen.dart';
-import 'favorites_screen.dart' show FavoritesStore; // <- usa a store
+import '../screens/pdf_viewer_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   static const route = '/';
@@ -19,27 +20,57 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<PdfDocumentModel> _items = [];
   bool _busy = false;
 
-  late final FavoritesStore _favs =
-      FavoritesStore(ServiceLocator.instance.auth.currentUid ?? '_anon');
+  // Favoritos em memória + sub de eventos
+  Set<String> _favIds = <String>{};
+  StreamSubscription<void>? _favSub;
 
   @override
   void initState() {
     super.initState();
     _load();
+    // ouvir alterações a favoritos vindas de qualquer sítio da app
+    _favSub = ServiceLocator.instance.db.favoritesEvents().listen((_) {
+      _loadFavorites(); // atualização imediata
+    });
+  }
+
+  @override
+  void dispose() {
+    _favSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _load() async {
     final docs = await ServiceLocator.instance.db.listPdfs();
     docs.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
-    setState(() => _items = docs);
+    final favDocs = await ServiceLocator.instance.db.listFavorites();
+    if (!mounted) return;
+    setState(() {
+      _items = docs;
+      _favIds = favDocs.map((e) => e.id).toSet();
+    });
   }
 
-  // ---------- MÉTODOS QUE TE FALTAVAM ----------
-  Shader _titleGradient(Rect bounds) => const LinearGradient(
-        colors: [Color(0xFFFFC107), Color(0xFF4CAF50), Color(0xFF26C6DA)],
-        begin: Alignment.centerLeft,
-        end: Alignment.centerRight,
-      ).createShader(bounds);
+  Future<void> _loadFavorites() async {
+    final favDocs = await ServiceLocator.instance.db.listFavorites();
+    if (!mounted) return;
+    setState(() {
+      _favIds = favDocs.map((e) => e.id).toSet();
+    });
+  }
+
+  Future<void> _toggleFavorite(PdfDocumentModel d) async {
+    final isFav = _favIds.contains(d.id);
+    await ServiceLocator.instance.db.setFavorite(d.id, !isFav);
+    if (!mounted) return;
+    setState(() {
+      if (isFav) {
+        _favIds.remove(d.id);
+      } else {
+        _favIds.add(d.id);
+      }
+    });
+  }
 
   Future<void> _importPdf() async {
     try {
@@ -49,12 +80,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
         withData: false,
       );
       if (picked == null || picked.files.isEmpty) return;
-
       final file = picked.files.single;
       final srcPath = file.path!;
       final storage = ServiceLocator.instance.storage;
       final destDir = await storage.appRoot();
-      final newPath = await storage.createUniqueFilePath(destDir, extension: 'pdf');
+      final newPath =
+          await storage.createUniqueFilePath(destDir, extension: 'pdf');
       await storage.copyFile(srcPath, newPath);
 
       final count = await ServiceLocator.instance.pdf.getPageCount(newPath);
@@ -68,15 +99,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
       );
       await ServiceLocator.instance.db.upsertPdf(model);
       await _load();
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('PDF importado')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('PDF importado')),
+        );
+      }
     } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Falha a importar: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Falha a importar: $e')),
+        );
+      }
     }
   }
 
@@ -91,8 +124,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
           'Isto remove o ficheiro, as anotações e os áudios associados.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          FilledButton.tonal(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apagar')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancelar')),
+          FilledButton.tonal(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Apagar')),
         ],
       ),
     );
@@ -130,98 +167,107 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (mounted) setState(() => _busy = false);
     }
   }
-  // ---------- FIM DOS MÉTODOS ----------
+
+  Shader _titleGradient(Rect bounds) {
+    // amarelo → verde → azul claro (estilo ScrollCast)
+    return const LinearGradient(
+      colors: [
+        Color(0xFFFFC107),
+        Color(0xFF4CAF50),
+        Color(0xFF26C6DA),
+      ],
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+    ).createShader(bounds);
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      // 🔥 Logout removido — agora vive na aba Perfil
       appBar: AppBar(title: const Text('A minha biblioteca')),
       body: Stack(
         children: [
           _items.isEmpty
-              ? const Center(child: Text('Sem PDFs ainda. Toca em "Importar PDF".'))
+              ? const Center(
+                  child: Text('Sem PDFs ainda. Toca em "Importar PDF".'),
+                )
               : ListView.separated(
                   itemCount: _items.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (_, i) {
                     final d = _items[i];
-                    return FutureBuilder<bool>(
-                      future: _favs.isFav(d.id),
-                      builder: (ctx, snap) {
-                        final isFav = snap.data ?? false;
-                        return ListTile(
-                          leading: Icon(
-                            isFav ? Icons.star_rounded : Icons.star_outline_rounded,
-                            color: isFav ? const Color(0xFFFFD64D) : null,
-                          ),
-                          title: ShaderMask(
-                            shaderCallback: _titleGradient,
-                            blendMode: BlendMode.srcIn,
-                            child: Text(
-                              d.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.w700,
-                                  ),
+                    final isFav = _favIds.contains(d.id);
+                    return ListTile(
+                      leading: GestureDetector(
+                        onTap: () => _toggleFavorite(d),
+                        child: isFav
+                            ? ShaderMask(
+                                shaderCallback: _titleGradient,
+                                blendMode: BlendMode.srcIn,
+                                child: const Icon(Icons.star, size: 22),
+                              )
+                            : const Icon(Icons.star_border,
+                                size: 22, color: Colors.white24),
+                      ),
+                      title: ShaderMask(
+                        shaderCallback: _titleGradient,
+                        blendMode: BlendMode.srcIn,
+                        child: Text(
+                          d.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context)
+                              .textTheme
+                              .titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      subtitle: Text('${d.pageCount} páginas'),
+                      onTap: () => Navigator.pushNamed(
+                        context,
+                        PdfViewerScreen.route,
+                        arguments: PdfViewerArgs(
+                          pdfId: d.id,
+                          name: d.name,
+                          path: d.originalPath,
+                        ),
+                      ).then((_) => _load()),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            tooltip: 'Apagar',
+                            onPressed: _busy ? null : () => _deletePdf(d),
+                            icon: Image.asset(
+                              'assets/icon_delete.png',
+                              width: 24,
+                              height: 24,
+                              errorBuilder: (_, __, ___) =>
+                                  const Icon(Icons.delete, size: 24),
                             ),
                           ),
-                          subtitle: Text('${d.pageCount} páginas'),
-                          onTap: () => Navigator.pushNamed(
-                            context,
-                            PdfViewerScreen.route,
-                            arguments: PdfViewerArgs(pdfId: d.id, name: d.name, path: d.originalPath),
-                          ).then((_) => _load()),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                tooltip: isFav ? 'Remover dos favoritos' : 'Adicionar aos favoritos',
-                                onPressed: _busy ? null : () async {
-                                  await _favs.toggle(d.id);
-                                  setState(() {}); // refresca o leading
-                                },
-                                icon: Icon(isFav ? Icons.star_rounded : Icons.star_outline_rounded),
-                              ),
-                              IconButton(
-                                tooltip: 'Apagar',
-                                onPressed: _busy ? null : () => _deletePdf(d),
-                                icon: Image.asset(
-                                  'assets/icon_delete.png',
-                                  width: 24, height: 24,
-                                  errorBuilder: (_, __, ___) => const Icon(Icons.delete, size: 24),
-                                ),
-                              ),
-                              const Icon(Icons.chevron_right),
-                            ],
-                          ),
-                        );
-                      },
+                          const Icon(Icons.chevron_right),
+                        ],
+                      ),
                     );
                   },
                 ),
-          if (_busy) const PositionedFillBusy(),
+          if (_busy)
+            const Positioned.fill(
+              child: IgnorePointer(
+                child: ColoredBox(
+                  color: Color(0x88000000),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ),
+            ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _busy ? null : _importPdf,
         label: const Text('Importar PDF'),
         icon: const Icon(Icons.file_open),
-      ),
-    );
-  }
-}
-
-class PositionedFillBusy extends StatelessWidget {
-  const PositionedFillBusy({super.key});
-  @override
-  Widget build(BuildContext context) {
-    return const Positioned.fill(
-      child: IgnorePointer(
-        child: ColoredBox(
-          color: Color(0x88000000),
-          child: Center(child: CircularProgressIndicator()),
-        ),
       ),
     );
   }
