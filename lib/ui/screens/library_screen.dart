@@ -20,28 +20,34 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<PdfDocumentModel> _items = [];
   bool _busy = false;
 
-  // Favoritos em memória + sub de eventos
+  // favoritos em memória + sub de eventos
   Set<String> _favIds = <String>{};
   StreamSubscription<void>? _favSub;
+
+  // pesquisa
+  final TextEditingController _searchCtrl = TextEditingController();
+  String _query = '';
+  Timer? _debounce;
 
   @override
   void initState() {
     super.initState();
     _load();
-    // ouvir alterações a favoritos vindas de qualquer sítio da app
     _favSub = ServiceLocator.instance.db.favoritesEvents().listen((_) {
-      _loadFavorites(); // atualização imediata
+      _loadFavorites();
     });
   }
 
   @override
   void dispose() {
+    _debounce?.cancel();
     _favSub?.cancel();
+    _searchCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
-    final docs = await ServiceLocator.instance.db.listPdfs();
+    final docs = await ServiceLocator.instance.db.listPdfs(query: _query);
     docs.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
     final favDocs = await ServiceLocator.instance.db.listFavorites();
     if (!mounted) return;
@@ -56,6 +62,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (!mounted) return;
     setState(() {
       _favIds = favDocs.map((e) => e.id).toSet();
+    });
+  }
+
+  void _onSearchChanged(String value) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 180), () {
+      _query = value.trim();
+      _load();
     });
   }
 
@@ -84,8 +98,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final srcPath = file.path!;
       final storage = ServiceLocator.instance.storage;
       final destDir = await storage.appRoot();
-      final newPath =
-          await storage.createUniqueFilePath(destDir, extension: 'pdf');
+      final newPath = await storage.createUniqueFilePath(destDir, extension: 'pdf');
       await storage.copyFile(srcPath, newPath);
 
       final count = await ServiceLocator.instance.pdf.getPageCount(newPath);
@@ -124,12 +137,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
           'Isto remove o ficheiro, as anotações e os áudios associados.',
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancelar')),
-          FilledButton.tonal(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Apagar')),
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton.tonal(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apagar')),
         ],
       ),
     );
@@ -183,15 +192,44 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
+    // cor visível para ícone não-favorito (claro e escuro)
+    final Color _unfavColor = cs.onSurfaceVariant.withOpacity(0.55);
+
     return Scaffold(
-      // 🔥 Logout removido — agora vive na aba Perfil
-      appBar: AppBar(title: const Text('A minha biblioteca')),
+      appBar: AppBar(
+        title: const Text('A minha biblioteca'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(56),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+            child: TextField(
+              controller: _searchCtrl,
+              onChanged: _onSearchChanged,
+              decoration: InputDecoration(
+                hintText: 'Pesquisar PDFs…',
+                prefixIcon: const Icon(Icons.search),
+                isDense: true,
+                filled: true,
+                fillColor: cs.surface.withOpacity(.65),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: Colors.transparent),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(color: cs.primary),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
       body: Stack(
         children: [
           _items.isEmpty
-              ? const Center(
-                  child: Text('Sem PDFs ainda. Toca em "Importar PDF".'),
-                )
+              ? const Center(child: Text('Sem PDFs. Importa um PDF para começar.'))
               : ListView.separated(
                   itemCount: _items.length,
                   separatorBuilder: (_, __) => const Divider(height: 1),
@@ -199,16 +237,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     final d = _items[i];
                     final isFav = _favIds.contains(d.id);
                     return ListTile(
-                      leading: GestureDetector(
+                      leading: InkResponse(
                         onTap: () => _toggleFavorite(d),
+                        radius: 24,
                         child: isFav
                             ? ShaderMask(
                                 shaderCallback: _titleGradient,
                                 blendMode: BlendMode.srcIn,
-                                child: const Icon(Icons.star, size: 22),
+                                child: const Icon(Icons.star, size: 24),
                               )
-                            : const Icon(Icons.star_border,
-                                size: 22, color: Colors.white24),
+                            : Icon(Icons.star_border, size: 24, color: _unfavColor),
                       ),
                       title: ShaderMask(
                         shaderCallback: _titleGradient,
@@ -217,10 +255,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           d.name,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context)
-                              .textTheme
-                              .titleMedium
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                              ),
                         ),
                       ),
                       subtitle: Text('${d.pageCount} páginas'),

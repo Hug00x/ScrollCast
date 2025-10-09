@@ -1,3 +1,4 @@
+// lib/ui/screens/notebooks_screen.dart
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
@@ -12,7 +13,7 @@ class NotebooksScreen extends StatefulWidget {
 }
 
 class _NotebooksScreenState extends State<NotebooksScreen> {
-  String? _folder; // filtro atual
+  String? _folder; // filtro atual (null = raiz/"Sem Pasta")
   List<String> _folders = [];
   List<NotebookModel> _items = [];
   bool _busy = false;
@@ -25,8 +26,20 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
 
   Future<void> _reload() async {
     final db = ServiceLocator.instance.db;
-    final items = await db.listNotebooks(folder: _folder);
+
+    // ✅ Se _folder == null, mostra APENAS cadernos da raiz.
+    // Caso contrário, mostra só os da pasta selecionada.
+    List<NotebookModel> items;
+    if (_folder == null) {
+      items = await db.listNotebooks(); // todos…
+      items = items
+          .where((n) => n.folder == null || n.folder!.isEmpty)
+          .toList(); // …filtrados para raiz
+    } else {
+      items = await db.listNotebooks(folder: _folder);
+    }
     items.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
+
     final folders = await db.listNotebookFolders();
     setState(() {
       _items = items;
@@ -55,6 +68,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       ),
     );
     if (ok != true) return;
+
     final id = const Uuid().v4();
     final nb = NotebookModel(
       id: id,
@@ -63,12 +77,18 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       pageCount: 1, // começa com 1 página vazia
       lastOpened: DateTime.now(),
     );
+
     await ServiceLocator.instance.db.upsertNotebook(nb);
     await _reload();
+
     if (!mounted) return;
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => NotebookViewerScreen(args: NotebookViewerArgs(notebookId: nb.id, name: nb.name))),
+      MaterialPageRoute(
+        builder: (_) => NotebookViewerScreen(
+          args: NotebookViewerArgs(notebookId: nb.id, name: nb.name),
+        ),
+      ),
     ).then((_) => _reload());
   }
 
@@ -85,6 +105,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       ),
     );
     if (ok != true) return;
+
     setState(() => _busy = true);
     await ServiceLocator.instance.db.deleteNotebook(n.id);
     await _reload();
@@ -95,9 +116,12 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
   Widget build(BuildContext context) {
     final chips = <Widget>[
       ChoiceChip(
-        label: const Text('Todas'),
+        label: const Text('Sem Pasta'),
         selected: _folder == null,
-        onSelected: (_) => setState(() { _folder = null; _reload(); }),
+        onSelected: (_) => setState(() {
+          _folder = null;
+          _reload();
+        }),
       ),
       for (final f in _folders)
         Padding(
@@ -105,7 +129,10 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
           child: ChoiceChip(
             label: Text(f),
             selected: _folder == f,
-            onSelected: (_) => setState(() { _folder = f; _reload(); }),
+            onSelected: (_) => setState(() {
+              _folder = f;
+              _reload();
+            }),
           ),
         ),
     ];
@@ -136,7 +163,11 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                             onTap: () {
                               Navigator.push(
                                 context,
-                                MaterialPageRoute(builder: (_) => NotebookViewerScreen(args: NotebookViewerArgs(notebookId: n.id, name: n.name))),
+                                MaterialPageRoute(
+                                  builder: (_) => NotebookViewerScreen(
+                                    args: NotebookViewerArgs(notebookId: n.id, name: n.name),
+                                  ),
+                                ),
                               ).then((_) => _reload());
                             },
                             trailing: IconButton(
@@ -153,7 +184,10 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
           if (_busy)
             const Positioned.fill(
               child: IgnorePointer(
-                child: ColoredBox(color: Color(0x33000000), child: Center(child: CircularProgressIndicator())),
+                child: ColoredBox(
+                  color: Color(0x33000000),
+                  child: Center(child: CircularProgressIndicator()),
+                ),
               ),
             ),
         ],
