@@ -1,3 +1,4 @@
+// main.dart
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -17,18 +18,35 @@ import 'ui/app_theme.dart';
 import 'ui/screens/sign_in_screen.dart';
 import 'ui/screens/library_screen.dart';
 import 'ui/screens/pdf_viewer_screen.dart';
+import 'ui/screens/home_shell.dart';          // <-- NOVO
 
-void main() async {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(); // <-- Firebase
+  await Firebase.initializeApp();
   await Hive.initFlutter();
 
+  // prefs (para guardar o ThemeMode)
+  final prefs = await Hive.openBox('prefs');
+
   ServiceLocator.instance
-    ..auth = AuthServiceFirebase()
-    ..pdf = PdfServiceImpl()
-    ..audio = AudioServiceImpl()
+    ..auth    = AuthServiceFirebase()
+    ..pdf     = PdfServiceImpl()
+    ..audio   = AudioServiceImpl()
     ..storage = StorageServiceImpl()
-    ..db = DatabaseServiceImpl();
+    ..db      = DatabaseServiceImpl()
+    ..theme   = ValueNotifier<ThemeMode>(
+      (prefs.get('themeMode') as String?) == 'light'
+          ? ThemeMode.light
+          : ThemeMode.dark,
+    );
+
+  // re-guardar quando muda
+  ServiceLocator.instance.theme.addListener(() {
+    prefs.put(
+      'themeMode',
+      ServiceLocator.instance.theme.value == ThemeMode.light ? 'light' : 'dark',
+    );
+  });
 
   runApp(const PdfNotesApp());
 }
@@ -42,6 +60,9 @@ class ServiceLocator {
   late AudioService audio;
   late StorageService storage;
   late DatabaseService db;
+
+  // <-- NOVO
+  late ValueNotifier<ThemeMode> theme;
 }
 
 class PdfNotesApp extends StatelessWidget {
@@ -49,30 +70,30 @@ class PdfNotesApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = buildAppTheme();
-    return MaterialApp(
-      title: 'ScrollCast',
-      theme: theme,
-      debugShowCheckedModeBanner: false,
-
-      // Mantemos o "home" com o decisor de root (login vs biblioteca)
-      home: const _RootDecider(),
-
-      // PARA EVITAR O ASSERT: não usamos o `routes:` map.
-      // Em vez disso, resolvemos as rotas aqui:
-      onGenerateRoute: (settings) {
-        switch (settings.name) {
-          case SignInScreen.route:
-            return MaterialPageRoute(builder: (_) => const SignInScreen());
-          case LibraryScreen.route:
-            return MaterialPageRoute(builder: (_) => const LibraryScreen());
-          case PdfViewerScreen.route:
-            final args = settings.arguments as PdfViewerArgs;
-            return MaterialPageRoute(builder: (_) => PdfViewerScreen(args: args));
-          default:
-            // fallback: vai para a biblioteca (ou SignIn se preferires)
-            return MaterialPageRoute(builder: (_) => const LibraryScreen());
-        }
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: ServiceLocator.instance.theme,
+      builder: (_, mode, __) {
+        return MaterialApp(
+          title: 'ScrollCast',
+          theme: buildLightAppTheme(),   // claro
+          darkTheme: buildAppTheme(),    // escuro (o teu atual)
+          themeMode: mode,
+          debugShowCheckedModeBanner: false,
+          home: const _RootDecider(),
+          onGenerateRoute: (settings) {
+            switch (settings.name) {
+              case SignInScreen.route:
+                return MaterialPageRoute(builder: (_) => const SignInScreen());
+              case LibraryScreen.route:
+                return MaterialPageRoute(builder: (_) => const LibraryScreen());
+              case PdfViewerScreen.route:
+                final args = settings.arguments as PdfViewerArgs;
+                return MaterialPageRoute(builder: (_) => PdfViewerScreen(args: args));
+              default:
+                return MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 1));
+            }
+          },
+        );
       },
     );
   }
@@ -91,7 +112,8 @@ class _RootDecider extends StatelessWidget {
         }
         final uid = snap.data;
         if (uid == null) return const SignInScreen();
-        return const LibraryScreen();
+        // Abre Home com a aba 1 = Biblioteca
+        return const HomeShell(initialIndex: 1);
       },
     );
   }

@@ -4,7 +4,8 @@ import 'package:uuid/uuid.dart';
 
 import '../../main.dart';
 import '../../models/pdf_document_model.dart';
-import '../screens/pdf_viewer_screen.dart';
+import 'pdf_viewer_screen.dart';
+import 'favorites_screen.dart' show FavoritesStore; // <- usa a store
 
 class LibraryScreen extends StatefulWidget {
   static const route = '/';
@@ -18,6 +19,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<PdfDocumentModel> _items = [];
   bool _busy = false;
 
+  late final FavoritesStore _favs =
+      FavoritesStore(ServiceLocator.instance.auth.currentUid ?? '_anon');
+
   @override
   void initState() {
     super.initState();
@@ -30,6 +34,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
     setState(() => _items = docs);
   }
 
+  // ---------- MÉTODOS QUE TE FALTAVAM ----------
+  Shader _titleGradient(Rect bounds) => const LinearGradient(
+        colors: [Color(0xFFFFC107), Color(0xFF4CAF50), Color(0xFF26C6DA)],
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+      ).createShader(bounds);
+
   Future<void> _importPdf() async {
     try {
       final picked = await FilePicker.platform.pickFiles(
@@ -38,6 +49,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         withData: false,
       );
       if (picked == null || picked.files.isEmpty) return;
+
       final file = picked.files.single;
       final srcPath = file.path!;
       final storage = ServiceLocator.instance.storage;
@@ -56,17 +68,15 @@ class _LibraryScreenState extends State<LibraryScreen> {
       );
       await ServiceLocator.instance.db.upsertPdf(model);
       await _load();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('PDF importado')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('PDF importado')),
+      );
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Falha a importar: $e')),
-        );
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Falha a importar: $e')),
+      );
     }
   }
 
@@ -120,39 +130,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (mounted) setState(() => _busy = false);
     }
   }
-
-  Shader _titleGradient(Rect bounds) {
-    // amarelo → verde → azul claro (estilo ScrollCast)
-    return const LinearGradient(
-      colors: [
-        Color(0xFFFFC107), // amber
-        Color(0xFF4CAF50), // green
-        Color(0xFF26C6DA), // light teal/blue
-      ],
-      begin: Alignment.centerLeft,
-      end: Alignment.centerRight,
-    ).createShader(bounds);
-  }
+  // ---------- FIM DOS MÉTODOS ----------
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('A minha biblioteca'),
-        leading: IconButton(
-          tooltip: 'Terminar sessão',
-          icon: const Icon(Icons.logout),
-          onPressed: () async {
-            await ServiceLocator.instance.auth.signOut();
-            if (!mounted) return;
-            Navigator.of(context).pushNamedAndRemoveUntil(
-              '/signin', // certifica-te que SignInScreen.route == '/signin'
-              (route) => false,
-            );
-          },
-        ),
-      ),
+      appBar: AppBar(title: const Text('A minha biblioteca')),
       body: Stack(
         children: [
           _items.isEmpty
@@ -162,64 +145,83 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   separatorBuilder: (_, __) => const Divider(height: 1),
                   itemBuilder: (_, i) {
                     final d = _items[i];
-                    return ListTile(
-                      title: ShaderMask(
-                        shaderCallback: _titleGradient,
-                        blendMode: BlendMode.srcIn,
-                        child: Text(
-                          d.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                fontWeight: FontWeight.w700,
-                              ),
-                        ),
-                      ),
-                      subtitle: Text('${d.pageCount} páginas'),
-                      onTap: () => Navigator.pushNamed(
-                        context,
-                        PdfViewerScreen.route,
-                        arguments: PdfViewerArgs(
-                          pdfId: d.id,
-                          name: d.name,
-                          path: d.originalPath,
-                        ),
-                      ).then((_) => _load()),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            tooltip: 'Apagar',
-                            onPressed: _busy ? null : () => _deletePdf(d),
-                            icon: Image.asset(
-                              'assets/icon_delete.png', // <-- nome que disseste
-                              width: 24,
-                              height: 24,
-                              errorBuilder: (_, __, ___) =>
-                                  const Icon(Icons.delete, size: 24),
+                    return FutureBuilder<bool>(
+                      future: _favs.isFav(d.id),
+                      builder: (ctx, snap) {
+                        final isFav = snap.data ?? false;
+                        return ListTile(
+                          leading: Icon(
+                            isFav ? Icons.star_rounded : Icons.star_outline_rounded,
+                            color: isFav ? const Color(0xFFFFD64D) : null,
+                          ),
+                          title: ShaderMask(
+                            shaderCallback: _titleGradient,
+                            blendMode: BlendMode.srcIn,
+                            child: Text(
+                              d.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                             ),
                           ),
-                          const Icon(Icons.chevron_right),
-                        ],
-                      ),
+                          subtitle: Text('${d.pageCount} páginas'),
+                          onTap: () => Navigator.pushNamed(
+                            context,
+                            PdfViewerScreen.route,
+                            arguments: PdfViewerArgs(pdfId: d.id, name: d.name, path: d.originalPath),
+                          ).then((_) => _load()),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: isFav ? 'Remover dos favoritos' : 'Adicionar aos favoritos',
+                                onPressed: _busy ? null : () async {
+                                  await _favs.toggle(d.id);
+                                  setState(() {}); // refresca o leading
+                                },
+                                icon: Icon(isFav ? Icons.star_rounded : Icons.star_outline_rounded),
+                              ),
+                              IconButton(
+                                tooltip: 'Apagar',
+                                onPressed: _busy ? null : () => _deletePdf(d),
+                                icon: Image.asset(
+                                  'assets/icon_delete.png',
+                                  width: 24, height: 24,
+                                  errorBuilder: (_, __, ___) => const Icon(Icons.delete, size: 24),
+                                ),
+                              ),
+                              const Icon(Icons.chevron_right),
+                            ],
+                          ),
+                        );
+                      },
                     );
                   },
                 ),
-          if (_busy)
-            const Positioned.fill(
-              child: IgnorePointer(
-                child: ColoredBox(
-                  color: Color(0x88000000),
-                  child: Center(child: CircularProgressIndicator()),
-                ),
-              ),
-            ),
+          if (_busy) const PositionedFillBusy(),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _busy ? null : _importPdf,
         label: const Text('Importar PDF'),
         icon: const Icon(Icons.file_open),
+      ),
+    );
+  }
+}
+
+class PositionedFillBusy extends StatelessWidget {
+  const PositionedFillBusy({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return const Positioned.fill(
+      child: IgnorePointer(
+        child: ColoredBox(
+          color: Color(0x88000000),
+          child: Center(child: CircularProgressIndicator()),
+        ),
       ),
     );
   }

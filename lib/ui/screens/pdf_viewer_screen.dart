@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show MatrixUtils;
 
 import '../widgets/text_note_bubble.dart';
-import '../widgets/draggable_note_panel.dart';          // << NOVO
+import '../widgets/draggable_note_panel.dart';
 import '../../main.dart';
 import '../../models/annotations.dart';
 import '../widgets/drawing_canvas.dart';
@@ -53,9 +53,16 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   bool _handMode = false;
   bool _loading = true;
 
-  // estado do painel flutuante de notas
+  // painel flutuante de notas
   int? _openedNoteIndex;
-  final Map<int, Offset> _notePanelPos = {}; // posição por índice (sessão)
+  final Map<int, Offset> _notePanelPos = {};
+
+  // ⬇️ NOVO: chave e rect global da área do papel
+  final GlobalKey _paperKey = GlobalKey();
+  Rect? _paperRect; // em coordenadas globais (tela)
+
+  // valores aproximados do painel (para clamp)
+  static const Size _kNotePanelSize = Size(280, 200);
 
   @override
   void initState() {
@@ -100,6 +107,23 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     _canvasIgnore = false;
     _openedNoteIndex = null;
     _notePanelPos.clear();
+
+    // Atualiza rect do papel no próximo frame
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updatePaperRect());
+  }
+
+  // ⬇️ NOVO: calcula o rect global da área do papel
+  void _updatePaperRect() {
+    final ctx = _paperKey.currentContext;
+    final overlay = Overlay.of(context);
+    if (ctx == null || overlay == null) return;
+    final rb = ctx.findRenderObject() as RenderBox?;
+    if (rb == null) return;
+    final topLeft = rb.localToGlobal(Offset.zero);
+    final size = rb.size;
+    setState(() {
+      _paperRect = Rect.fromLTWH(topLeft.dx, topLeft.dy, size.width, size.height);
+    });
   }
 
   Future<void> _savePage() async {
@@ -184,6 +208,21 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     await _savePage();
   }
 
+  // ⬇️ NOVO: clamp posição de painel à caixa do papel
+  Offset _clampToPaper(Offset desired, Size widgetSize) {
+    final r = _paperRect;
+    if (r == null) return desired;
+    final pad = 8.0;
+    final minX = r.left + pad;
+    final maxX = r.right - pad - widgetSize.width;
+    final minY = r.top + pad;
+    final maxY = r.bottom - pad - widgetSize.height;
+    return Offset(
+      desired.dx.clamp(minX, maxX).toDouble(),
+      desired.dy.clamp(minY, maxY).toDouble(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_loading || _pageBytes == null) {
@@ -230,7 +269,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
               tooltip: 'Anterior',
             ),
 
-            // Toggle Mão/Desenhar — em baixo
             Tooltip(
               message: _handMode ? 'Modo mão (arrastar) ativo' : 'Ativar modo mão',
               child: IconButton.filledTonal(
@@ -244,7 +282,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
               ),
             ),
 
-            // Nova nota de texto
             IconButton.filledTonal(
               tooltip: 'Nova nota de texto',
               onPressed: () => _createTextNote(context),
@@ -261,170 +298,200 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
         ),
       ),
 
-      body: Column(
+      body: Stack(
         children: [
-          // Barra de ferramentas (sem o toggle mão)
-          Padding(
-            padding: const EdgeInsets.only(left: 8, right: 4, top: 4, bottom: 2),
-            child: AnnotationToolbar(
-              mode: _mode,
-              onModeChanged: (m) => setState(() => _mode = m),
-              width: _width,
-              onWidthChanged: (w) => setState(() => _width = w),
-              color: _color,
-              onColorChanged: (c) => setState(() => _color = c),
-              onUndo: _onUndo,
-              onRedo: _onRedo,
-              eraserWidth: _eraserWidth,
-              onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
-            ),
-          ),
-
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
-              child: ClipRect(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    return InteractiveViewer(
-                      transformationController: _ivController,
-                      panEnabled: _handMode,
-                      minScale: 1.0,
-                      maxScale: 5.0,
-                      boundaryMargin: EdgeInsets.zero,
-                      clipBehavior: Clip.hardEdge,
-                      scaleEnabled: true,
-                      onInteractionUpdate: (_) {
-                        _currentScale = _ivController.value.getMaxScaleOnAxis();
-                        setState(() {});
-                      },
-                      child: FittedBox(
-                        fit: BoxFit.contain,
-                        alignment: Alignment.center,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(
-                            maxWidth: constraints.maxWidth,
-                            maxHeight: constraints.maxHeight,
-                          ),
-                          child: Stack(
-                            children: [
-                              Center(child: Image.memory(_pageBytes!, gaplessPlayback: true)),
-
-                              // medir a área útil para clamp dos pins
-                              Positioned.fill(
-                                child: LayoutBuilder(
-                                  builder: (_, c2) {
-                                    _imgSize = Size(c2.maxWidth, c2.maxHeight);
-                                    return const SizedBox.shrink();
-                                  },
-                                ),
-                              ),
-
-                              // Canvas
-                              Positioned.fill(
-                                child: IgnorePointer(
-                                  ignoring: _handMode || _canvasIgnore,
-                                  child: DrawingCanvas(
-                                    key: ValueKey('canvas-$_pageIndex'),
-                                    strokes: _strokes,
-                                    mode: _mode,
-                                    strokeWidth: _width,
-                                    strokeColor: _color,
-                                    onStrokeEnd: (s) async {
-                                      setState(() => _strokes.add(s));
-                                      await _savePage();
-                                    },
-                                    onPointerCountChanged: (count) {
-                                      final ignore = _handMode || count >= 2;
-                                      if (ignore != _canvasIgnore) setState(() => _canvasIgnore = ignore);
-                                    },
-                                    eraserWidthPreview: _eraserWidth,
-                                    // >>> NOVO: salva quando a borracha altera os traços
-                                    onStrokesChanged: () async {
-                                      await _savePage();
-                                    },
-                                  ),
-                                ),
-                              ),
-
-                              // Pinos de áudio
-                              Positioned.fill(
-                                child: AudioPinLayer(
-                                  notes: _audioNotes,
-                                  scale: _currentScale.clamp(0.6, 4.0),
-                                  onMove: (idx, pos) async {
-                                    setState(() => _audioNotes[idx] = _audioNotes[idx].copyWith(position: pos));
-                                    await _savePage();
-                                  },
-                                  onDelete: (idx) async {
-                                    setState(() => _audioNotes.removeAt(idx));
-                                    await _savePage();
-                                  },
-                                  overlay: Overlay.of(context), // mantém a folha livre
-                                ),
-                              ),
-
-                              // Pins de notas de texto
-                              ..._textNotes.indexed.map((entry) {
-                                final idx = entry.$1;
-                                final note = entry.$2;
-                                return TextNoteBubble(
-                                  key: ValueKey('txtpin-$idx-$_pageIndex'),
-                                  note: note,
-                                  canvasSize: _imgSize,
-                                  onChanged: (updated) async {
-                                    setState(() => _textNotes[idx] = updated);
-                                    await _savePage();
-                                  },
-                                  onOpen: () {
-                                    setState(() => _openedNoteIndex = idx);
-                                  },
-                                );
-                              }),
-
-                              // Painel flutuante da nota de texto
-                              if (_openedNoteIndex != null) ...[
-                                Positioned.fill(
-                                  child: GestureDetector(
-                                    onTap: () => setState(() => _openedNoteIndex = null),
-                                    child: const SizedBox.shrink(),
-                                  ),
-                                ),
-                                DraggableNotePanel(
-                                  key: ValueKey('panel-$_openedNoteIndex-$_pageIndex'),
-                                  note: _textNotes[_openedNoteIndex!],
-                                  initialPosition: _notePanelPos[_openedNoteIndex!] ??
-                                      Offset(32, kToolbarHeight + 24),
-                                  onPositionChanged: (pos) {
-                                    _notePanelPos[_openedNoteIndex!] = pos;
-                                  },
-                                  onTextChanged: (txt) async {
-                                    final i = _openedNoteIndex!;
-                                    final n = _textNotes[i];
-                                    setState(() => _textNotes[i] = TextNote(position: n.position, text: txt));
-                                    await _savePage();
-                                  },
-                                  onDelete: () async {
-                                    final i = _openedNoteIndex!;
-                                    setState(() {
-                                      _textNotes.removeAt(i);
-                                      _openedNoteIndex = null;
-                                    });
-                                    await _savePage();
-                                  },
-                                  onClose: () => setState(() => _openedNoteIndex = null),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                      ),
-                    );
-                  },
+          Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(left: 8, right: 4, top: 4, bottom: 2),
+                child: AnnotationToolbar(
+                  mode: _mode,
+                  onModeChanged: (m) => setState(() => _mode = m),
+                  width: _width,
+                  onWidthChanged: (w) => setState(() => _width = w),
+                  color: _color,
+                  onColorChanged: (c) => setState(() => _color = c),
+                  onUndo: _onUndo,
+                  onRedo: _onRedo,
+                  eraserWidth: _eraserWidth,
+                  onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
                 ),
               ),
-            ),
+
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                  child: ClipRect(
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        return InteractiveViewer(
+                          transformationController: _ivController,
+                          panEnabled: _handMode,
+                          minScale: 1.0,
+                          maxScale: 5.0,
+                          boundaryMargin: EdgeInsets.zero,
+                          clipBehavior: Clip.hardEdge,
+                          scaleEnabled: true,
+                          onInteractionUpdate: (_) {
+                            _currentScale = _ivController.value.getMaxScaleOnAxis();
+                            setState(() {});
+                            // atualiza também o rect do papel (pode mudar com layout)
+                            WidgetsBinding.instance.addPostFrameCallback((_) => _updatePaperRect());
+                          },
+                          child: FittedBox(
+                            fit: BoxFit.contain,
+                            alignment: Alignment.center,
+                            child: ConstrainedBox(
+                              constraints: BoxConstraints(
+                                maxWidth: constraints.maxWidth,
+                                maxHeight: constraints.maxHeight,
+                              ),
+                              child: Stack(
+                                key: _paperKey, // ⬅️ mede a área do papel
+                                children: [
+                                  Center(child: Image.memory(_pageBytes!, gaplessPlayback: true)),
+
+                                  Positioned.fill(
+                                    child: LayoutBuilder(
+                                      builder: (_, c2) {
+                                        _imgSize = Size(c2.maxWidth, c2.maxHeight);
+                                        return const SizedBox.shrink();
+                                      },
+                                    ),
+                                  ),
+
+                                  Positioned.fill(
+                                    child: IgnorePointer(
+                                      ignoring: _handMode || _canvasIgnore,
+                                      child: DrawingCanvas(
+                                        key: ValueKey('canvas-$_pageIndex'),
+                                        strokes: _strokes,
+                                        mode: _mode,
+                                        strokeWidth: _width,
+                                        strokeColor: _color,
+                                        onStrokeEnd: (s) async {
+                                          setState(() => _strokes.add(s));
+                                          await _savePage();
+                                        },
+                                        onPointerCountChanged: (count) {
+                                          final ignore = _handMode || count >= 2;
+                                          if (ignore != _canvasIgnore) setState(() => _canvasIgnore = ignore);
+                                        },
+                                        eraserWidthPreview: _eraserWidth,
+                                        onStrokesChanged: () async {
+                                          await _savePage();
+                                        },
+                                      ),
+                                    ),
+                                  ),
+
+                                  // Pinos de áudio — HUD confinado ao papel
+                                  Positioned.fill(
+                                    child: AudioPinLayer(
+                                      notes: _audioNotes,
+                                      scale: _currentScale.clamp(0.6, 4.0),
+                                      onMove: (idx, pos) async {
+                                        setState(() => _audioNotes[idx] = _audioNotes[idx].copyWith(position: pos));
+                                        await _savePage();
+                                      },
+                                      onDelete: (idx) async {
+                                        setState(() => _audioNotes.removeAt(idx));
+                                        await _savePage();
+                                      },
+                                      overlay: Overlay.of(context),
+                                      allowedBounds: _paperRect, // ⬅️ NOVO
+                                    ),
+                                  ),
+
+                                  // Pins de notas de texto
+                                  ..._textNotes.indexed.map((entry) {
+                                    final idx = entry.$1;
+                                    final note = entry.$2;
+                                    return TextNoteBubble(
+                                      key: ValueKey('txtpin-$idx-$_pageIndex'),
+                                      note: note,
+                                      canvasSize: _imgSize,
+                                      onChanged: (updated) async {
+                                        setState(() => _textNotes[idx] = updated);
+                                        await _savePage();
+                                      },
+                                      onOpen: () {
+                                        setState(() {
+                                          _openedNoteIndex = idx;
+                                          _notePanelPos.putIfAbsent(
+                                            idx,
+                                            () {
+                                              // posição inicial “dentro do papel”
+                                              final r = _paperRect;
+                                              if (r == null) return const Offset(24, kToolbarHeight + 24);
+                                              final start = Offset(r.left + 24, r.top + 24);
+                                              return _clampToPaper(start, _kNotePanelSize);
+                                            },
+                                          );
+                                        });
+                                      },
+                                    );
+                                  }),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
+
+          // Painel flutuante (fora do InteractiveViewer), mas limitado ao papel
+          if (_openedNoteIndex != null) ...[
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => setState(() => _openedNoteIndex = null),
+                child: const SizedBox.shrink(),
+              ),
+            ),
+
+            Builder(
+              builder: (_) {
+                final current = _notePanelPos[_openedNoteIndex!] ?? const Offset(24, kToolbarHeight + 24);
+                final clamped = _clampToPaper(current, _kNotePanelSize); // ⬅️ aplica limites
+                return Positioned(
+                  left: clamped.dx,
+                  top: clamped.dy,
+                  child: DraggableNotePanel(
+                    key: ValueKey('panel-$_openedNoteIndex-$_pageIndex'),
+                    note: _textNotes[_openedNoteIndex!],
+                    initialPosition: clamped,
+                    onPositionChanged: (pos) {
+                      // sempre clamp ao mover
+                      _notePanelPos[_openedNoteIndex!] = _clampToPaper(pos, _kNotePanelSize);
+                      setState(() {});
+                    },
+                    onTextChanged: (txt) async {
+                      final i = _openedNoteIndex!;
+                      final n = _textNotes[i];
+                      setState(() => _textNotes[i] = TextNote(position: n.position, text: txt));
+                      await _savePage();
+                    },
+                    onDelete: () async {
+                      final i = _openedNoteIndex!;
+                      setState(() {
+                        _textNotes.removeAt(i);
+                        _notePanelPos.remove(i);
+                        _openedNoteIndex = null;
+                      });
+                      await _savePage();
+                    },
+                    onClose: () => setState(() => _openedNoteIndex = null),
+                  ),
+                );
+              },
+            ),
+          ],
         ],
       ),
     );

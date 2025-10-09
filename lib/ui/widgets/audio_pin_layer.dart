@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
-
 import '../../models/annotations.dart';
 
 typedef AudioMoveCallback = Future<void> Function(int index, Offset newPos);
@@ -14,7 +13,8 @@ class AudioPinLayer extends StatefulWidget {
     required this.onMove,
     required this.onDelete,
     required this.scale,
-    required this.overlay, // <- novo
+    required this.overlay,
+    required this.allowedBounds, // ⬅️ NOVO
   });
 
   final List<AudioNote> notes;
@@ -22,6 +22,9 @@ class AudioPinLayer extends StatefulWidget {
   final AudioDeleteCallback onDelete;
   final double scale;
   final OverlayState overlay;
+
+  /// Área global (tela) onde a HUD pode existir (a “caixa do papel”).
+  final Rect? allowedBounds; // ⬅️ NOVO
 
   @override
   State<AudioPinLayer> createState() => _AudioPinLayerState();
@@ -39,8 +42,7 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
     super.dispose();
   }
 
-  void _toggleHud(int i, Rect pinRect) {
-    // fecha se já existir
+  void _toggleHud(int i, Rect pinRectGlobal) {
     if (_entries.containsKey(i)) {
       _entries[i]!.remove();
       _entries.remove(i);
@@ -50,7 +52,8 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
 
     final entry = OverlayEntry(
       builder: (ctx) => _AudioHudFloating(
-        anchor: pinRect,
+        anchorGlobal: pinRectGlobal,
+        allowedBounds: widget.allowedBounds, // ⬅️ NOVO
         onClose: () {
           _entries[i]?.remove();
           _entries.remove(i);
@@ -64,7 +67,7 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
         },
         filePath: widget.notes[i].filePath,
         durationMsHint: widget.notes[i].durationMs,
-        onRelayout: () => setState(() {}), // para repintar se mexer
+        onRelayout: () => setState(() {}),
       ),
     );
 
@@ -92,8 +95,8 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
               _AudioPin(
                 note: widget.notes[i],
                 scale: widget.scale,
-                pinRect: pinRect(widget.notes[i].position),
-                onTap: (rect) => _toggleHud(i, rect),
+                localPinRect: pinRect(widget.notes[i].position),
+                onTapGlobalRect: (globalRect) => _toggleHud(i, globalRect), // ⬅️ muda
                 onMove: (pos) => widget.onMove(i, pos),
               ),
           ],
@@ -107,15 +110,15 @@ class _AudioPin extends StatefulWidget {
   const _AudioPin({
     required this.note,
     required this.scale,
-    required this.pinRect,
-    required this.onTap,
+    required this.localPinRect,
+    required this.onTapGlobalRect,
     required this.onMove,
   });
 
   final AudioNote note;
   final double scale;
-  final Rect pinRect;
-  final ValueChanged<Rect> onTap;
+  final Rect localPinRect; // rect relativo a este layer
+  final ValueChanged<Rect> onTapGlobalRect; // ⬅️ agora envia GLOBAL rect
   final ValueChanged<Offset> onMove;
 
   @override
@@ -141,7 +144,7 @@ class _AudioPinState extends State<_AudioPin> {
 
   @override
   Widget build(BuildContext context) {
-    final rect = widget.pinRect;
+    final rect = widget.localPinRect;
     const s = 28.0;
 
     return Positioned(
@@ -149,7 +152,14 @@ class _AudioPinState extends State<_AudioPin> {
       top: rect.top,
       child: GestureDetector(
         behavior: HitTestBehavior.deferToChild,
-        onTap: () => widget.onTap(rect),
+        onTap: () {
+          // converte rect local -> global
+          final rb = context.findRenderObject() as RenderBox?;
+          if (rb != null) {
+            final origin = rb.localToGlobal(Offset.zero);
+            widget.onTapGlobalRect(rect.shift(origin));
+          }
+        },
         onPanUpdate: (d) {
           final delta = d.delta / widget.scale;
           _pos = Offset(_pos.dx + delta.dx, _pos.dy + delta.dy);
@@ -184,10 +194,11 @@ class _AudioPinState extends State<_AudioPin> {
   }
 }
 
-/// HUD flutuante em Overlay (mede o próprio tamanho, sem altura fixa).
+/// HUD flutuante em Overlay (confinada ao papel).
 class _AudioHudFloating extends StatefulWidget {
   const _AudioHudFloating({
-    required this.anchor,
+    required this.anchorGlobal,
+    required this.allowedBounds, // ⬅️ NOVO
     required this.onClose,
     required this.onDelete,
     required this.filePath,
@@ -195,7 +206,8 @@ class _AudioHudFloating extends StatefulWidget {
     required this.onRelayout,
   });
 
-  final Rect anchor;
+  final Rect anchorGlobal;     // onde está o pin (global)
+  final Rect? allowedBounds;   // caixa do papel (global)
   final VoidCallback onClose;
   final Future<void> Function() onDelete;
   final String filePath;
@@ -218,37 +230,41 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
 
   late Offset _topLeft; // posição do card no overlay
   static const double _w = 270;
+  static const double _hGuess = 120;
 
   @override
   void initState() {
     super.initState();
-    _topLeft = _suggestPos(widget.anchor);
+    _topLeft = _suggestPos(widget.anchorGlobal);
     _init();
   }
 
   @override
   void didUpdateWidget(covariant _AudioHudFloating oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.anchor != widget.anchor) {
-      _topLeft = _suggestPos(widget.anchor);
+    if (oldWidget.anchorGlobal != widget.anchorGlobal ||
+        oldWidget.allowedBounds != widget.allowedBounds) {
+      _topLeft = _suggestPos(widget.anchorGlobal);
     }
   }
 
-  Offset _suggestPos(Rect anchor) {
-    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final overlaySize = overlay.size;
-    const hGuess = 120.0;
+  Offset _suggestPos(Rect anchorGlobal) {
+    // limites: se não houver bounds, usa overlay inteiro
+    final overlayBox = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final overlaySize = overlayBox.size;
+    final Rect bounds = widget.allowedBounds ??
+        Rect.fromLTWH(0, 0, overlaySize.width, overlaySize.height);
 
-    // tenta acima, senão abaixo
-    final above = Offset(
-      (anchor.center.dx - _w / 2).clamp(8, overlaySize.width - _w - 8),
-      (anchor.top - 8 - hGuess).clamp(8, overlaySize.height - hGuess - 8),
+    // tenta acima do pin; se não couber, abaixo
+    final tryAbove = Offset(
+      (anchorGlobal.center.dx - _w / 2).clamp(bounds.left + 8, bounds.right - _w - 8),
+      (anchorGlobal.top - 8 - _hGuess).clamp(bounds.top + 8, bounds.bottom - _hGuess - 8),
     );
-    if (above.dy >= 8) return above;
+    if (tryAbove.dy >= bounds.top + 8) return tryAbove;
 
     return Offset(
-      (anchor.center.dx - _w / 2).clamp(8, overlaySize.width - _w - 8),
-      (anchor.bottom + 8).clamp(8, overlaySize.height - hGuess - 8),
+      (anchorGlobal.center.dx - _w / 2).clamp(bounds.left + 8, bounds.right - _w - 8),
+      (anchorGlobal.bottom + 8).clamp(bounds.top + 8, bounds.bottom - _hGuess - 8),
     );
   }
 
@@ -267,16 +283,10 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
     });
 
     _stateSub = _player.playerStateStream.listen((s) async {
-      // reset no fim
       if (s.processingState == ProcessingState.completed) {
         await _player.pause();
         await _player.seek(Duration.zero);
-        if (mounted) {
-          setState(() {
-            _playing = false;
-            _pos = Duration.zero;
-          });
-        }
+        if (mounted) setState(() { _playing = false; _pos = Duration.zero; });
       } else {
         if (mounted) setState(() => _playing = s.playing);
       }
@@ -294,21 +304,25 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
   String _fmt(Duration d) {
     String t(int n) => n.toString().padLeft(2, '0');
     return '${t(d.inMinutes.remainder(60))}:${t(d.inSeconds.remainder(60))}';
-    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final overlayBox = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final overlaySize = overlayBox.size;
+    final Rect bounds = widget.allowedBounds ??
+        Rect.fromLTWH(0, 0, overlaySize.width, overlaySize.height);
+
     return Positioned(
       left: _topLeft.dx,
       top: _topLeft.dy,
       width: _w,
       child: GestureDetector(
         onPanUpdate: (d) {
-          final overlay =
-              Overlay.of(context).context.findRenderObject() as RenderBox;
-          final size = overlay.size;
-          final nx = (_topLeft.dx + d.delta.dx).clamp(8, size.width - _w - 8);
-          final ny = (_topLeft.dy + d.delta.dy).clamp(8, size.height - 60);
+          final nx = (_topLeft.dx + d.delta.dx)
+              .clamp(bounds.left + 8, bounds.right - _w - 8);
+          final ny = (_topLeft.dy + d.delta.dy)
+              .clamp(bounds.top + 8, bounds.bottom - _hGuess - 8);
           setState(() => _topLeft = Offset(nx.toDouble(), ny.toDouble()));
           widget.onRelayout();
         },
@@ -331,8 +345,7 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
                           const Icon(Icons.mic_rounded, size: 18),
                           const SizedBox(width: 6),
                           const Expanded(
-                            child: Text('Áudio',
-                                style: TextStyle(fontWeight: FontWeight.w600)),
+                            child: Text('Áudio', style: TextStyle(fontWeight: FontWeight.w600)),
                           ),
                           IconButton(
                             visualDensity: VisualDensity.compact,
@@ -362,9 +375,7 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
                                 await _player.play();
                               }
                             },
-                            icon: Icon(_playing
-                                ? Icons.pause_rounded
-                                : Icons.play_arrow_rounded),
+                            icon: Icon(_playing ? Icons.pause_rounded : Icons.play_arrow_rounded),
                           ),
                           const SizedBox(width: 8),
                           Expanded(
@@ -374,40 +385,25 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
                                 SliderTheme(
                                   data: SliderTheme.of(context).copyWith(
                                     trackHeight: 3,
-                                    thumbShape: const RoundSliderThumbShape(
-                                        enabledThumbRadius: 7),
-                                    overlayShape: const RoundSliderOverlayShape(
-                                        overlayRadius: 12),
+                                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 7),
+                                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
                                   ),
                                   child: Slider(
                                     min: 0,
-                                    max: (_dur.inMilliseconds == 0
-                                            ? 1
-                                            : _dur.inMilliseconds)
-                                        .toDouble(),
-                                    value: _pos.inMilliseconds
-                                        .clamp(0, _dur.inMilliseconds)
-                                        .toDouble(),
+                                    max: (_dur.inMilliseconds == 0 ? 1 : _dur.inMilliseconds).toDouble(),
+                                    value: _pos.inMilliseconds.clamp(0, _dur.inMilliseconds).toDouble(),
                                     onChanged: (v) async {
-                                      final d =
-                                          Duration(milliseconds: v.round());
+                                      final d = Duration(milliseconds: v.round());
                                       await _player.seek(d);
                                       setState(() => _pos = d);
                                     },
                                   ),
                                 ),
                                 Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                   children: [
-                                    Text(_fmt(_pos),
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall),
-                                    Text(_fmt(_dur),
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .bodySmall),
+                                    Text(_fmt(_pos), style: Theme.of(context).textTheme.bodySmall),
+                                    Text(_fmt(_dur), style: Theme.of(context).textTheme.bodySmall),
                                   ],
                                 ),
                               ],
