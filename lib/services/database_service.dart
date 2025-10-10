@@ -39,4 +39,8 @@ abstract class DatabaseService {
   Future<PageAnnotations?> getNotebookPage(String notebookId, int pageIndex);
   Future<List<PageAnnotations>> getAllNotebookPages(String notebookId);
   Future<void> deleteNotebookPages(String notebookId, {int? pageIndex});
+
+  /// 👉 Chamar SEMPRE após mudar de conta (UID mudou)
+  /// Fecha boxes do UID anterior para evitar “bleed” de dados na UI.
+  Future<void> onAccountSwitched();
 }

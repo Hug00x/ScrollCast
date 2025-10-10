@@ -9,9 +9,16 @@ import '../main.dart';
 import '../models/notebook_model.dart';
 
 class DatabaseServiceImpl implements DatabaseService {
-  String get _uid => ServiceLocator.instance.auth.currentUid ?? '_anon';
+  // Mantém o último UID usado para conseguirmos fechar as boxes antigas
+  String? _lastUid;
 
-  // Boxes
+  String get _uid {
+    final u = ServiceLocator.instance.auth.currentUid ?? '_anon';
+    _lastUid ??= u;
+    return u;
+  }
+
+  // Boxes (dependentes do UID)
   String get _pdfsBoxName   => 'pdfs_$_uid';
   String get _annBoxName    => 'annotations_$_uid';
   String get _favBoxName    => 'favorites_$_uid';
@@ -236,5 +243,31 @@ class DatabaseServiceImpl implements DatabaseService {
     } else {
       await box.delete('$notebookId:$pageIndex');
     }
+  }
+
+  // ===== Troca de conta (fecha boxes do UID anterior) =====
+  Future<void> _closeIfOpen(String name) async {
+    if (Hive.isBoxOpen(name)) {
+      await Hive.box(name).close();
+    }
+  }
+
+  @override
+  Future<void> onAccountSwitched() async {
+    final newUid = ServiceLocator.instance.auth.currentUid ?? '_anon';
+    if (_lastUid == null || _lastUid == newUid) {
+      _lastUid = newUid; // inicializa na primeira chamada
+      return;
+    }
+
+    // fecha boxes do UID antigo
+    await _closeIfOpen('pdfs_${_lastUid!}');
+    await _closeIfOpen('annotations_${_lastUid!}');
+    await _closeIfOpen('favorites_${_lastUid!}');
+    await _closeIfOpen('notebooks_${_lastUid!}');
+    await _closeIfOpen('notebook_pages_${_lastUid!}');
+
+    // passa a trackear o novo UID
+    _lastUid = newUid;
   }
 }
