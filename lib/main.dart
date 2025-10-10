@@ -18,7 +18,9 @@ import 'ui/app_theme.dart';
 import 'ui/screens/sign_in_screen.dart';
 import 'ui/screens/library_screen.dart';
 import 'ui/screens/pdf_viewer_screen.dart';
-import 'ui/screens/home_shell.dart';          // <-- NOVO
+import 'ui/screens/home_shell.dart';        
+import 'ui/screens/sign_up_screen.dart';
+
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -84,6 +86,8 @@ class PdfNotesApp extends StatelessWidget {
             switch (settings.name) {
               case SignInScreen.route:
                 return MaterialPageRoute(builder: (_) => const SignInScreen());
+              case SignUpScreen.route:
+                return MaterialPageRoute(builder: (_) => const SignUpScreen());
               case LibraryScreen.route:
                 return MaterialPageRoute(builder: (_) => const LibraryScreen());
               case PdfViewerScreen.route:

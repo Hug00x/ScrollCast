@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/painting.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hive/hive.dart';
 import 'package:image_picker/image_picker.dart';
@@ -42,9 +43,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     final u = FirebaseAuth.instance.currentUser;
     if (u != null) {
-      // preserva localAvatarPath existente
       final prev = _box!.get(u.uid);
-      final existingPath = (prev is Map && prev['localAvatarPath'] is String) ? prev['localAvatarPath'] as String? : null;
+      final existingPath = (prev is Map && prev['localAvatarPath'] is String)
+          ? prev['localAvatarPath'] as String?
+          : null;
       final ka = _KnownAccount.fromUser(u).copyWith(localAvatarPath: existingPath);
       await _box!.put(ka.uid, ka.toMap());
     }
@@ -70,6 +72,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _accounts = items);
   }
 
+  // --------- FIX fantasma: limpar estado user-scoped + reset navegação ----------
+  Future<void> _afterAuthIdentityChange({String goTo = '/'}) async {
+    try {
+      // fecha TODAS as boxes (assim as próximas aberturas já usam o novo uid)
+      await Hive.close();
+    } catch (_) {}
+    try {
+      // limpa caches de imagens (thumbnails/avatars, etc.)
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+    } catch (_) {}
+    if (!mounted) return;
+    // reinicia a app na root pedida (carrega dados do novo utilizador)
+    Navigator.of(context).pushNamedAndRemoveUntil(goTo, (_) => false);
+  }
+
   Future<void> _switchToAccount(_KnownAccount acc) async {
     final auth = FirebaseAuth.instance;
     if (auth.currentUser?.uid == acc.uid) return;
@@ -86,12 +104,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final u = auth.currentUser;
       if (u != null && _box != null) {
         final prev = _box!.get(u.uid);
-        final existingPath = (prev is Map && prev['localAvatarPath'] is String) ? prev['localAvatarPath'] as String? : null;
+        final existingPath = (prev is Map && prev['localAvatarPath'] is String)
+            ? prev['localAvatarPath'] as String?
+            : null;
         final ka = _KnownAccount.fromUser(u).copyWith(localAvatarPath: existingPath);
         await _box!.put(ka.uid, ka.toMap());
-        _loadAccounts();
       }
-      if (mounted) setState(() {});
+
+      await _afterAuthIdentityChange(goTo: '/'); // ← força reload já com conta Y
     } catch (e) {
       _snack('Falha ao trocar para ${acc.email ?? acc.displayName}: $e');
     }
@@ -109,8 +129,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await u.delete();
       await _box?.delete(u.uid);
       _snack('Conta apagada.');
-      if (!mounted) return;
-      Navigator.of(context).pushNamedAndRemoveUntil('/signin', (_) => false);
+      await _afterAuthIdentityChange(goTo: '/signin');
     } on FirebaseAuthException catch (e) {
       if (e.code == 'requires-recent-login') {
         final success = await _reauthenticateFlow(u);
@@ -119,9 +138,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             await u.delete();
             await _box?.delete(u.uid);
             _snack('Conta apagada.');
-            if (mounted) {
-              Navigator.of(context).pushNamedAndRemoveUntil('/signin', (_) => false);
-            }
+            await _afterAuthIdentityChange(goTo: '/signin');
           } catch (e2) {
             _snack('Falha ao apagar após reautenticação: $e2');
           }
@@ -153,7 +170,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // ========= Avatar (guarda caminho absoluto em known_accounts) =========
+  // ================== Avatar local (email/password) ==================
 
   Future<void> _changeAvatar() async {
     final user = FirebaseAuth.instance.currentUser;
@@ -166,23 +183,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (xfile == null) return;
 
     final uid = user.uid;
-
-    // diretório global da app (não dependente do utilizador)
     final root = await ServiceLocator.instance.storage.appRoot();
-    final avatarsDir = Directory(p.join(root, 'avatars')); // continua a ser o mesmo, mas usamos caminho ABS
+    final avatarsDir = Directory(p.join(root, 'avatars'));
     await avatarsDir.create(recursive: true);
 
-    // apaga anteriores + evict cache
     await _deleteAllAvatarsFor(uid);
 
-    // nome com timestamp para bust de cache
     final ts = DateTime.now().millisecondsSinceEpoch;
     final ext = p.extension(xfile.path).toLowerCase();
     final destPath = p.join(avatarsDir.path, 'avatar_${uid}_$ts$ext');
 
     await ServiceLocator.instance.storage.copyFile(xfile.path, destPath);
 
-    // guarda caminho absoluto na box
     if (_box != null) {
       final prev = _box!.get(uid);
       final m = prev is Map ? Map<String, dynamic>.from(prev) : <String, dynamic>{};
@@ -192,10 +204,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
       m['photoUrl'] = m['photoUrl'] ?? user.photoURL;
       m['isGoogle'] = m['isGoogle'] ?? false;
       m['lastUsed'] = DateTime.now().millisecondsSinceEpoch;
-      m['localAvatarPath'] = destPath; // <- chave nova
+      m['localAvatarPath'] = destPath;
       await _box!.put(uid, m);
       _loadAccounts();
     }
+
+    try {
+      PaintingBinding.instance.imageCache.evict(FileImage(File(destPath)));
+      PaintingBinding.instance.imageCache.clearLiveImages();
+    } catch (_) {}
 
     if (mounted) setState(() {});
   }
@@ -211,7 +228,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await user.updatePhotoURL(null);
     } catch (_) {}
 
-    // limpa caminho guardado
     if (_box != null) {
       final prev = _box!.get(user.uid);
       if (prev is Map) {
@@ -234,24 +250,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
         .listSync()
         .whereType<File>()
         .where((f) => p.basename(f.path).startsWith('avatar_${uid}_'))) {
-      _evictFileFromCache(f.path);
+      try {
+        PaintingBinding.instance.imageCache.evict(FileImage(File(f.path)));
+        PaintingBinding.instance.imageCache.clearLiveImages();
+      } catch (_) {}
       await f.delete().catchError((_) {});
     }
   }
 
-  void _evictFileFromCache(String path) {
-    try {
-      final provider = FileImage(File(path));
-      // ignore: deprecated_member_use
-      PaintingBinding.instance.imageCache.evict(provider);
-      // ignore: deprecated_member_use
-      PaintingBinding.instance.imageCache.clearLiveImages();
-    } catch (_) {}
-  }
-
   // =================== Dialogs/UX ===================
 
-  Future<String?> _askPassword(BuildContext ctx, String email, {String title = 'Introduz a password'}) async {
+  Future<String?> _askPassword(BuildContext ctx, String email,
+      {String title = 'Introduz a password'}) async {
     final c = TextEditingController();
     return showDialog<String>(
       context: ctx,
@@ -260,13 +270,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Align(alignment: Alignment.centerLeft, child: Text(email, style: Theme.of(ctx).textTheme.bodySmall)),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(email, style: Theme.of(ctx).textTheme.bodySmall),
+            ),
             const SizedBox(height: 8),
             TextField(
               controller: c,
               autofocus: true,
               obscureText: true,
-              decoration: const InputDecoration(labelText: 'Password', border: OutlineInputBorder()),
+              decoration: const InputDecoration(
+                labelText: 'Password',
+                border: OutlineInputBorder(),
+              ),
               onSubmitted: (_) => Navigator.pop(dctx, c.text),
             ),
           ],
@@ -296,7 +312,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               TextField(
                 controller: t,
                 autofocus: true,
-                decoration: const InputDecoration(border: OutlineInputBorder(), hintText: 'confirmar'),
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: 'confirmar',
+                ),
                 onChanged: (_) => setSt(() {}),
                 onSubmitted: (_) {
                   if (_matches(t.text)) Navigator.pop(dctx, true);
@@ -306,7 +325,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancelar')),
-            FilledButton(onPressed: _matches(t.text) ? () => Navigator.pop(dctx, true) : null, child: const Text('Apagar')),
+            FilledButton(
+              onPressed: _matches(t.text) ? () => Navigator.pop(dctx, true) : null,
+              child: const Text('Apagar'),
+            ),
           ],
         ),
       ),
@@ -337,7 +359,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         padding: const EdgeInsets.all(16),
         children: [
           Center(child: _ProfileAvatar(accountsBox: _box)),
-
           const SizedBox(height: 16),
           Center(child: Text('Sessão ativa', style: Theme.of(context).textTheme.labelMedium)),
           const SizedBox(height: 24),
@@ -409,9 +430,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             title: const Text('Terminar sessão'),
             onTap: () async {
               await ServiceLocator.instance.auth.signOut();
-              if (context.mounted) {
-                Navigator.of(context).pushNamedAndRemoveUntil('/signin', (_) => false);
-              }
+              await _afterAuthIdentityChange(goTo: '/signin');
             },
           ),
 
@@ -440,7 +459,9 @@ class _AccountAvatar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (a.isGoogle) {
-      final provider = (a.photoUrl != null && a.photoUrl!.isNotEmpty) ? NetworkImage(a.photoUrl!) : null;
+      final provider = (a.photoUrl != null && a.photoUrl!.isNotEmpty)
+          ? NetworkImage(a.photoUrl!)
+          : null;
       return CircleAvatar(
         radius: 18,
         backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(.2),
@@ -450,7 +471,9 @@ class _AccountAvatar extends StatelessWidget {
     }
 
     final path = a.localAvatarPath;
-    final provider = (path != null && File(path).existsSync()) ? FileImage(File(path)) : null;
+    final provider = (path != null && File(path).existsSync())
+        ? FileImage(File(path))
+        : null;
     return CircleAvatar(
       radius: 18,
       backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(.2),
@@ -496,13 +519,14 @@ class _ProfileAvatar extends StatelessWidget {
           );
         }
 
-        // email/password → usa caminho guardado na box
         String? path;
         final map = accountsBox?.get(user.uid);
         if (map is Map && map['localAvatarPath'] is String) {
           path = map['localAvatarPath'] as String;
         }
-        final provider = (path != null && File(path).existsSync()) ? FileImage(File(path)) : null;
+        final provider = (path != null && File(path).existsSync())
+            ? FileImage(File(path))
+            : null;
         return CircleAvatar(
           radius: 44,
           backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(.2),
@@ -531,8 +555,8 @@ class _KnownAccount {
   final String uid;
   final String? email;
   final String? displayName;
-  final String? photoUrl;        // Google
-  final String? localAvatarPath; // caminho absoluto para avatar local (email/password)
+  final String? photoUrl;
+  final String? localAvatarPath;
   final bool isGoogle;
   final DateTime? lastUsed;
 
@@ -590,7 +614,7 @@ class _KnownAccount {
         email: m['email'] as String?,
         displayName: m['displayName'] as String?,
         photoUrl: m['photoUrl'] as String?,
-        localAvatarPath: m['localAvatarPath'] as String?, // pode ser null em registos antigos
+        localAvatarPath: m['localAvatarPath'] as String?,
         isGoogle: (m['isGoogle'] as bool?) ?? false,
         lastUsed: m['lastUsed'] != null
             ? DateTime.fromMillisecondsSinceEpoch(m['lastUsed'] as int)

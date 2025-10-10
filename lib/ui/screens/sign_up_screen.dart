@@ -2,17 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../main.dart';
-import 'sign_up_screen.dart';
+import 'sign_in_screen.dart';
 
-class SignInScreen extends StatefulWidget {
-  static const route = '/signin';
-  const SignInScreen({super.key});
+class SignUpScreen extends StatefulWidget {
+  static const route = '/signup';
+  const SignUpScreen({super.key});
 
   @override
-  State<SignInScreen> createState() => _SignInScreenState();
+  State<SignUpScreen> createState() => _SignUpScreenState();
 }
 
-class _SignInScreenState extends State<SignInScreen> {
+class _SignUpScreenState extends State<SignUpScreen> {
   final _email = TextEditingController();
   final _pass = TextEditingController();
   bool _busy = false;
@@ -40,7 +40,7 @@ class _SignInScreenState extends State<SignInScreen> {
     }
   }
 
-  Future<void> _doSignIn() async {
+  Future<void> _doSignUp() async {
     _unfocus();
     setState(() { _busy = true; _error = null; });
     try {
@@ -49,25 +49,14 @@ class _SignInScreenState extends State<SignInScreen> {
 
       final methods = await _safeFetchMethods(email);
       if (methods.contains('google.com')) {
-        setState(() => _error = 'Esta conta entra com Google. Usa "Continuar com Google".');
+        setState(() => _error = 'Este email já está associado a uma conta Google. Usa "Continuar com Google" no ecrã de entrada.');
         return;
       }
 
-      await ServiceLocator.instance.auth.signInWithEmail(email, pass);
-    } catch (e) {
-      if (ServiceLocator.instance.auth.currentUid == null) {
-        setState(() => _error = '$e');
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
+      await ServiceLocator.instance.auth.signUpWithEmail(email, pass);
 
-  Future<void> _doGoogle() async {
-    _unfocus();
-    setState(() { _busy = true; _error = null; });
-    try {
-      await ServiceLocator.instance.auth.signInWithGoogle();
+      if (!mounted) return;
+      Navigator.of(context).pop(); // volta ao fluxo principal (RootDecider trata do login ativo)
     } catch (e) {
       if (ServiceLocator.instance.auth.currentUid == null) {
         setState(() => _error = '$e');
@@ -81,16 +70,7 @@ class _SignInScreenState extends State<SignInScreen> {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(
-        actions: [
-          TextButton(
-            onPressed: _busy ? null : () {
-              Navigator.of(context).pushNamed(SignUpScreen.route);
-            },
-            child: const Text('Ainda não tens conta?  Criar'),
-          ),
-        ],
-      ),
+      appBar: AppBar(),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
@@ -123,7 +103,7 @@ class _SignInScreenState extends State<SignInScreen> {
                     controller: _pass,
                     obscureText: !_showPass,
                     textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _busy ? null : _doSignIn(),
+                    onSubmitted: (_) => _busy ? null : _doSignUp(),
                     decoration: InputDecoration(
                       labelText: 'Password',
                       suffixIcon: IconButton(
@@ -142,16 +122,10 @@ class _SignInScreenState extends State<SignInScreen> {
                     ),
 
                   FilledButton(
-                    onPressed: _busy ? null : _doSignIn,
+                    onPressed: _busy ? null : _doSignUp,
                     child: _busy
                         ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Entrar'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _doGoogle,
-                    icon: const Icon(Icons.g_mobiledata, size: 28),
-                    label: const Text('Continuar com Google'),
+                        : const Text('Criar conta'),
                   ),
                 ],
               ),
