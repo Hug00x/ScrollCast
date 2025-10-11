@@ -80,7 +80,11 @@ class _SignInScreenState extends State<SignInScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final kb = MediaQuery.of(context).viewInsets.bottom; // altura do teclado
+
     return Scaffold(
+      // mantemos o layout fixo; nós próprios gerimos o scroll/inset
+      resizeToAvoidBottomInset: false,
       appBar: AppBar(
         actions: [
           TextButton(
@@ -92,68 +96,74 @@ class _SignInScreenState extends State<SignInScreen> {
         ],
       ),
       body: SafeArea(
-        child: Center(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 420),
-            child: Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // Logo
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0F2230),
-                      borderRadius: BorderRadius.circular(24),
-                      boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 24)],
+        // remove insets automáticos para o Scaffold não “empurrar” nada
+        child: MediaQuery.removeViewInsets(
+          removeBottom: true,
+          context: context,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: SingleChildScrollView(
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + kb),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Logo
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0F2230),
+                        borderRadius: BorderRadius.circular(24),
+                        boxShadow: const [BoxShadow(color: Colors.black54, blurRadius: 24)],
+                      ),
+                      child: Image.asset('assets/scrollcast_with_name.png', width: 200, height: 200),
                     ),
-                    child: Image.asset('assets/scrollcast_with_name.png', width: 200, height: 200),
-                  ),
-                  const SizedBox(height: 24),
+                    const SizedBox(height: 24),
 
-                  TextField(
-                    controller: _email,
-                    keyboardType: TextInputType.emailAddress,
-                    textInputAction: TextInputAction.next,
-                    decoration: const InputDecoration(labelText: 'Email'),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: _pass,
-                    obscureText: !_showPass,
-                    textInputAction: TextInputAction.done,
-                    onSubmitted: (_) => _busy ? null : _doSignIn(),
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      suffixIcon: IconButton(
-                        tooltip: _showPass ? 'Esconder' : 'Mostrar',
-                        onPressed: () => setState(() => _showPass = !_showPass),
-                        icon: Icon(_showPass ? Icons.visibility_off : Icons.visibility),
+                    TextField(
+                      controller: _email,
+                      keyboardType: TextInputType.emailAddress,
+                      textInputAction: TextInputAction.next,
+                      decoration: const InputDecoration(labelText: 'Email'),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _pass,
+                      obscureText: !_showPass,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _busy ? null : _doSignIn(),
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        suffixIcon: IconButton(
+                          tooltip: _showPass ? 'Esconder' : 'Mostrar',
+                          onPressed: () => setState(() => _showPass = !_showPass),
+                          icon: Icon(_showPass ? Icons.visibility_off : Icons.visibility),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
 
-                  if (_error != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Text(_error!, style: TextStyle(color: cs.error), textAlign: TextAlign.center),
+                    if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(_error!, style: TextStyle(color: cs.error), textAlign: TextAlign.center),
+                      ),
+
+                    FilledButton(
+                      onPressed: _busy ? null : _doSignIn,
+                      child: _busy
+                          ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          : const Text('Entrar'),
                     ),
-
-                  FilledButton(
-                    onPressed: _busy ? null : _doSignIn,
-                    child: _busy
-                        ? const SizedBox(height: 18, width: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Text('Entrar'),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: _busy ? null : _doGoogle,
-                    icon: const Icon(Icons.g_mobiledata, size: 28),
-                    label: const Text('Continuar com Google'),
-                  ),
-                ],
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: _busy ? null : _doGoogle,
+                      icon: const Icon(Icons.g_mobiledata, size: 28),
+                      label: const Text('Continuar com Google'),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
