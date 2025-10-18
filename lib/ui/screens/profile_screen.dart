@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hive/hive.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
+import 'onboarding_start_screen.dart';
 
 import '../../main.dart';
 
@@ -73,20 +74,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   // --------- FIX fantasma: limpar estado user-scoped + reset navegação ----------
-  Future<void> _afterAuthIdentityChange({String goTo = '/'}) async {
-    try {
-      // fecha TODAS as boxes (assim as próximas aberturas já usam o novo uid)
-      await Hive.close();
-    } catch (_) {}
-    try {
-      // limpa caches de imagens (thumbnails/avatars, etc.)
-      PaintingBinding.instance.imageCache.clear();
-      PaintingBinding.instance.imageCache.clearLiveImages();
-    } catch (_) {}
-    if (!mounted) return;
-    // reinicia a app na root pedida (carrega dados do novo utilizador)
-    Navigator.of(context).pushNamedAndRemoveUntil(goTo, (_) => false);
-  }
+ Future<void> _afterAuthIdentityChange({String goTo = OnboardingStartScreen.route}) async {
+  try { await Hive.close(); } catch (_) {}
+  try {
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
+  } catch (_) {}
+  if (!mounted) return;
+  Navigator.of(context).pushNamedAndRemoveUntil(goTo, (_) => false);
+}
 
   Future<void> _switchToAccount(_KnownAccount acc) async {
     final auth = FirebaseAuth.instance;
@@ -340,6 +336,105 @@ class _ProfileScreenState extends State<ProfileScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  // =================== Ajuda ===================
+
+  Future<void> _openHelp() async {
+    final cs = Theme.of(context).colorScheme;
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.85,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          builder: (_, controller) {
+            final textStyle = Theme.of(context).textTheme.bodyMedium!;
+            final titleStyle = Theme.of(context).textTheme.titleMedium!;
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              child: ListView(
+                controller: controller,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.help_outline_rounded, color: cs.primary),
+                      const SizedBox(width: 8),
+                      Text('Ajuda & Guia Rápido', style: Theme.of(context).textTheme.titleLarge),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Secção: Perfil
+                  _HelpSection(
+                    icon: Icons.person_outline_rounded,
+                    title: 'Este ecrã (Perfil)',
+                    children: [
+                      _HelpRow(Icons.brightness_6_rounded, 'Tema claro',
+                          'Alterna entre tema claro e escuro.'),
+                      _HelpRow(Icons.image_rounded, 'Alterar avatar',
+                          'Para contas de email/password: escolhe uma foto da galeria para o teu avatar.'),
+                      _HelpRow(Icons.delete_outline_rounded, 'Remover avatar',
+                          'Remove a foto de avatar local e volta às iniciais.'),
+                      _HelpRow(Icons.swap_horiz_rounded, 'Trocar de conta',
+                          'Muda diretamente para outra conta já usada neste dispositivo, sem passar pelo ecrã de autenticação.'),
+                      _HelpRow(Icons.logout_rounded, 'Terminar sessão',
+                          'Sai da conta atual e volta ao ecrã de entrada.'),
+                      _HelpRow(Icons.delete_forever_rounded, 'Apagar conta',
+                          'Apaga permanentemente a tua conta. Será pedido que escrevas “confirmar” para evitar enganos.'),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Secção: Anotações
+                  _HelpSection(
+                    icon: Icons.brush_rounded,
+                    title: 'Anotações (PDFs e Cadernos)',
+                    children: [
+                      _HelpRow(Icons.pan_tool_alt, 'Modo mão / Pan & Zoom',
+                          'Arrasta e faz zoom ao documento. Se uma caneta (stylus) for detetada, os dedos servem para pan/zoom e a caneta desenha.'),
+                      _HelpRow(Icons.brush, 'Ferramenta caneta / marcador',
+                          'Desenha com a espessura e cor escolhidas. Marcador tem transparência.'),
+                      _HelpRow(Icons.auto_fix_off_rounded,'Borracha',
+                          'Apaga segmentos do traço ao passar por cima. O tamanho da borracha é configurável.'),
+                      _HelpRow(Icons.sticky_note_2_outlined, 'Notas de texto',
+                          'Adiciona pinos de texto no documento. Toca para editar; o painel aparece em baixo.'),
+                      _HelpRow(Icons.mic_rounded, 'Notas de áudio',
+                          'Grava um áudio e fixa um pino na página. Podes mover/apagar.'),
+                      _HelpRow(Icons.undo, 'Undo / Redo',
+                          'Desfaz/refaz a última ação de desenho.'),
+                    ],
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Secção: Dicas
+                  _HelpSection(
+                    icon: Icons.lightbulb_outline_rounded,
+                    title: 'Dicas rápidas',
+                    children: [
+                      _HelpRow(Icons.edit, 'Palm rejection',
+                          'Com caneta presente, apenas a caneta desenha; dedos não deixam traço.'),
+                      _HelpRow(Icons.center_focus_strong, 'Repor enquadramento',
+                          'Volta o zoom/posição ao estado inicial.'),
+                      _HelpRow(Icons.info_outline_rounded, 'Sem perdas ao trocar de conta',
+                          'Quando trocas de conta, o armazenamento local troca de “namespace” e as tuas anotações mantêm-se corretas por conta.'),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   // =================== UI ===================
 
   @override
@@ -363,11 +458,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Center(child: Text('Sessão ativa', style: Theme.of(context).textTheme.labelMedium)),
           const SizedBox(height: 24),
 
+          // Tema
           SwitchListTile(
             title: const Text('Tema claro'),
             value: isLight,
             onChanged: (v) => theme.value = v ? ThemeMode.light : ThemeMode.dark,
             secondary: const Icon(Icons.brightness_6_rounded),
+          ),
+
+          // === AJUDA (logo após tema claro) ===
+          ListTile(
+            leading: const Icon(Icons.help_outline_rounded),
+            title: const Text('Ajuda'),
+            subtitle: const Text('Como funciona cada botão e ferramenta'),
+            onTap: _openHelp,
           ),
 
           if (!isGoogle) ...[
@@ -386,6 +490,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           const Divider(),
 
+          // Trocar de conta
           ListTile(
             leading: const Icon(Icons.swap_horiz_rounded),
             title: const Text('Trocar de conta'),
@@ -425,17 +530,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   },
           ),
 
-          ListTile(
-            leading: const Icon(Icons.logout_rounded),
-            title: const Text('Terminar sessão'),
-            onTap: () async {
-              await ServiceLocator.instance.auth.signOut();
-              await _afterAuthIdentityChange(goTo: '/signin');
-            },
-          ),
+          // Terminar sessão
+         ListTile(
+  leading: const Icon(Icons.logout_rounded),
+  title: const Text('Terminar sessão'),
+  onTap: () async {
+    await ServiceLocator.instance.auth.signOut();
+    await _afterAuthIdentityChange(goTo: OnboardingStartScreen.route);
+  },
+),
 
           const Divider(),
 
+          // Apagar conta
           ListTile(
             leading: const Icon(Icons.delete_forever_rounded),
             title: const Text('Apagar conta'),
@@ -620,4 +727,64 @@ class _KnownAccount {
             ? DateTime.fromMillisecondsSinceEpoch(m['lastUsed'] as int)
             : null,
       );
+}
+
+// ======= helpers visuais da ajuda =======
+
+class _HelpSection extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final List<Widget> children;
+  const _HelpSection({required this.icon, required this.title, required this.children});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surfaceVariant.withOpacity(0.35),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        leading: Icon(icon, color: cs.primary),
+        title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+        childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+        children: children,
+      ),
+    );
+  }
+}
+
+class _HelpRow extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final String desc;
+  const _HelpRow(this.icon, this.title, this.desc);
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 20, color: cs.primary),
+          const SizedBox(width: 10),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: Theme.of(context).textTheme.bodyMedium,
+                children: [
+                  TextSpan(text: '$title: ', style: const TextStyle(fontWeight: FontWeight.w600)),
+                  TextSpan(text: desc),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

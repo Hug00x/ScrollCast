@@ -1,8 +1,9 @@
+// ui/screens/sign_in_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../main.dart';
-import 'sign_up_screen.dart';
+import 'home_shell.dart';
 
 class SignInScreen extends StatefulWidget {
   static const route = '/signin';
@@ -31,6 +32,16 @@ class _SignInScreenState extends State<SignInScreen> {
     if (!f.hasPrimaryFocus && f.focusedChild != null) f.unfocus();
   }
 
+  void _goHomeIfLogged() {
+    final uid = ServiceLocator.instance.auth.currentUid;
+    if (uid != null && mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 1)),
+        (_) => false,
+      );
+    }
+  }
+
   Future<List<String>> _safeFetchMethods(String email) async {
     if (email.isEmpty || !email.contains('@')) return const <String>[];
     try {
@@ -54,9 +65,12 @@ class _SignInScreenState extends State<SignInScreen> {
       }
 
       await ServiceLocator.instance.auth.signInWithEmail(email, pass);
+      _goHomeIfLogged(); // ⬅️ navega já
     } catch (e) {
       if (ServiceLocator.instance.auth.currentUid == null) {
         setState(() => _error = '$e');
+      } else {
+        _goHomeIfLogged();
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -68,9 +82,12 @@ class _SignInScreenState extends State<SignInScreen> {
     setState(() { _busy = true; _error = null; });
     try {
       await ServiceLocator.instance.auth.signInWithGoogle();
+      _goHomeIfLogged(); // ⬅️ navega já
     } catch (e) {
       if (ServiceLocator.instance.auth.currentUid == null) {
         setState(() => _error = '$e');
+      } else {
+        _goHomeIfLogged();
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -80,23 +97,12 @@ class _SignInScreenState extends State<SignInScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final kb = MediaQuery.of(context).viewInsets.bottom; // altura do teclado
+    final kb = MediaQuery.of(context).viewInsets.bottom;
 
     return Scaffold(
-      // mantemos o layout fixo; nós próprios gerimos o scroll/inset
       resizeToAvoidBottomInset: false,
-      appBar: AppBar(
-        actions: [
-          TextButton(
-            onPressed: _busy ? null : () {
-              Navigator.of(context).pushNamed(SignUpScreen.route);
-            },
-            child: const Text('Ainda não tens conta?  Criar'),
-          ),
-        ],
-      ),
+      appBar: AppBar(),
       body: SafeArea(
-        // remove insets automáticos para o Scaffold não “empurrar” nada
         child: MediaQuery.removeViewInsets(
           removeBottom: true,
           context: context,
@@ -109,7 +115,6 @@ class _SignInScreenState extends State<SignInScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Logo
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(

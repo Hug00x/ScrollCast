@@ -20,6 +20,7 @@ import 'ui/screens/library_screen.dart';
 import 'ui/screens/pdf_viewer_screen.dart';
 import 'ui/screens/home_shell.dart';        
 import 'ui/screens/sign_up_screen.dart';
+import 'ui/screens/onboarding_start_screen.dart';
 
 
 Future<void> main() async {
@@ -84,6 +85,8 @@ class PdfNotesApp extends StatelessWidget {
           home: const _RootDecider(),
           onGenerateRoute: (settings) {
             switch (settings.name) {
+              case OnboardingStartScreen.route:
+                return MaterialPageRoute(builder: (_) => const OnboardingStartScreen());
               case SignInScreen.route:
                 return MaterialPageRoute(builder: (_) => const SignInScreen());
               case SignUpScreen.route:
@@ -115,7 +118,7 @@ class _RootDecider extends StatelessWidget {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
         final uid = snap.data;
-        if (uid == null) return const SignInScreen();
+        if (uid == null) return const OnboardingStartScreen();
         // Abre Home com a aba 1 = Biblioteca
         return const HomeShell(initialIndex: 1);
       },

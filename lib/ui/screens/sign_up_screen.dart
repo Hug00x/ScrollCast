@@ -1,7 +1,9 @@
+// ui/screens/sign_up_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../main.dart';
+import 'home_shell.dart';
 
 class SignUpScreen extends StatefulWidget {
   static const route = '/signup';
@@ -30,6 +32,16 @@ class _SignUpScreenState extends State<SignUpScreen> {
     if (!f.hasPrimaryFocus && f.focusedChild != null) f.unfocus();
   }
 
+  void _goHomeIfLogged() {
+    final uid = ServiceLocator.instance.auth.currentUid;
+    if (uid != null && mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const HomeShell(initialIndex: 1)),
+        (_) => false,
+      );
+    }
+  }
+
   Future<List<String>> _safeFetchMethods(String email) async {
     if (email.isEmpty || !email.contains('@')) return const <String>[];
     try {
@@ -48,18 +60,17 @@ class _SignUpScreenState extends State<SignUpScreen> {
 
       final methods = await _safeFetchMethods(email);
       if (methods.contains('google.com')) {
-        setState(() => _error =
-            'Este email já está associado a uma conta Google. Usa "Continuar com Google" no ecrã de entrada.');
+        setState(() => _error = 'Este email já está associado a uma conta Google. Usa "Continuar com Google" no ecrã de entrada.');
         return;
       }
 
       await ServiceLocator.instance.auth.signUpWithEmail(email, pass);
-
-      if (!mounted) return;
-      Navigator.of(context).pop();
+      _goHomeIfLogged(); // ⬅️ navega logo
     } catch (e) {
       if (ServiceLocator.instance.auth.currentUid == null) {
         setState(() => _error = '$e');
+      } else {
+        _goHomeIfLogged();
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -87,7 +98,6 @@ class _SignUpScreenState extends State<SignUpScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Logo
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(

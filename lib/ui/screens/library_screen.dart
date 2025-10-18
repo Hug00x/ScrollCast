@@ -199,7 +199,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('A minha biblioteca'),
+        title: const Text('Os meus PDFs'),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(56),
           child: Padding(
@@ -274,15 +274,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           IconButton(
-                            tooltip: 'Apagar',
-                            onPressed: _busy ? null : () => _deletePdf(d),
-                            icon: Image.asset(
-                              'assets/icon_delete.png',
-                              width: 24,
-                              height: 24,
-                              errorBuilder: (_, __, ___) =>
-                                  const Icon(Icons.delete, size: 24),
-                            ),
+                              tooltip: 'Apagar',
+                              onPressed: () => _deletePdf(d),
+                              icon: const Icon(Icons.delete_outline_rounded)
                           ),
                           const Icon(Icons.chevron_right),
                         ],
