@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../../models/annotations.dart';
 
@@ -49,10 +50,13 @@ class _TextNoteBubbleState extends State<TextNoteBubble> {
   @override
   Widget build(BuildContext context) {
     const pin = 28.0;
+    // garantir limites válidos: o upper bound do clamp nunca pode ser < 0
+    final maxLeft = math.max(0.0, widget.canvasSize.width - pin);
+    final maxTop = math.max(0.0, widget.canvasSize.height - pin);
 
     return Positioned(
-      left: (_pos.dx - pin / 2).clamp(0, (widget.canvasSize.width - pin)),
-      top: (_pos.dy - pin / 2).clamp(0, (widget.canvasSize.height - pin)),
+      left: (_pos.dx - pin / 2).clamp(0, maxLeft),
+      top: (_pos.dy - pin / 2).clamp(0, maxTop),
       child: GestureDetector(
         onTap: widget.onOpen,
         onPanUpdate: _onPanUpdate,

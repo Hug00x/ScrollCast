@@ -74,7 +74,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _afterAuthIdentityChange({String goTo = OnboardingStartScreen.route}) async {
-    try { await Hive.close(); } catch (_) {}
+    // Não fechamos o Hive aqui porque outras partes da app podem ainda estar a
+    // aceder a boxes durante a transição de ecrã, o que causava "HiveError: Box has already been closed".
+    // O Hive deve ser fechado quando a app realmente termina; aqui apenas limpamos caches visuais.
     try {
       PaintingBinding.instance.imageCache.clear();
       PaintingBinding.instance.imageCache.clearLiveImages();
@@ -119,7 +121,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // Falhou (ex.: password errada mas sem exceção)
         if (!acc.isGoogle) {
           await _showErrorDialog(
-            'Password incorreta (ou credenciais inválidas).',
+            'Password incorreta.',
             title: 'Autenticação falhou',
           );
         } else {

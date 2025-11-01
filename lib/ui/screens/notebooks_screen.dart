@@ -280,6 +280,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'notebooks_new_fab',
         onPressed: _newNotebook,
         icon: const Icon(Icons.note_add_rounded),
         label: const Text('Novo caderno'),

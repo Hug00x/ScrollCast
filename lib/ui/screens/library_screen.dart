@@ -296,6 +296,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'library_import_fab',
         onPressed: _busy ? null : _importPdf,
         label: const Text('Importar PDF'),
         icon: const Icon(Icons.file_open),
