@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show MatrixUtils;
+import 'dart:io';
+import 'dart:math' as math;
 
+import 'package:path/path.dart' as p;
+import 'package:image_picker/image_picker.dart';
+// MatrixUtils is available through material.dart; explicit import removed to silence analyzer
 import '../../main.dart';
 import '../../models/annotations.dart';
 import '../widgets/drawing_canvas.dart';
@@ -8,6 +12,7 @@ import '../widgets/annotation_toolbar.dart';
 import '../widgets/whatsapp_mic_button.dart';
 import '../widgets/audio_pin_layer.dart';
 import '../widgets/text_note_bubble.dart';
+import '../widgets/image_note_widget.dart';
 
 class NotebookViewerArgs {
   final String notebookId;
@@ -32,6 +37,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   final _undo = <Stroke>[];
   final _audioNotes = <AudioNote>[];
   final _textNotes = <TextNote>[];
+  final _imageNotes = <ImageNote>[];
 
   Size _paperSize = const Size(1, 1);
 
@@ -95,6 +101,9 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     _textNotes
       ..clear()
       ..addAll(ann?.textNotes ?? const []);
+    _imageNotes
+      ..clear()
+      ..addAll(ann?.imageNotes ?? const []);
 
     // reset enquadramento/UI mas NÃO mexer no _stylusEverSeen
     _ivController.value = Matrix4.identity();
@@ -116,6 +125,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
         strokes: List.of(_strokes),
         audioNotes: List.of(_audioNotes),
         textNotes: List.of(_textNotes),
+        imageNotes: List.of(_imageNotes),
       ),
     );
   }
@@ -216,6 +226,31 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
   }
 
+  Future<void> _importImage(BuildContext ctx) async {
+    final picker = ImagePicker();
+    final x = await picker.pickImage(source: ImageSource.gallery);
+    if (x == null) return;
+
+    final src = x.path;
+    final storage = ServiceLocator.instance.storage;
+    final root = await storage.appRoot();
+    final imagesDir = p.join(root, 'images');
+    // ensure dir exists
+    try {
+      final d = Directory(imagesDir);
+      if (!await d.exists()) await d.create(recursive: true);
+    } catch (_) {}
+    final ext = p.extension(src).replaceFirst('.', '');
+    final dest = await storage.createUniqueFilePath(imagesDir, extension: ext.isEmpty ? 'jpg' : ext);
+    await storage.copyFile(src, dest);
+
+  if (!mounted) return;
+  final center = _contentCenter(context);
+    final defaultSize = math.min(_paperSize.width, _paperSize.height) * 0.3;
+    setState(() => _imageNotes.add(ImageNote(position: center, filePath: dest, width: defaultSize, height: defaultSize)));
+    await _savePage();
+  }
+
   Offset _contentCenter(BuildContext context) {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return const Offset(0, 0);
@@ -297,6 +332,11 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
               tooltip: 'Nova nota de texto',
               onPressed: () => _createTextNote(context),
               icon: const Icon(Icons.notes_rounded),
+            ),
+            IconButton.filledTonal(
+              tooltip: 'Importar imagem',
+              onPressed: () => _importImage(context),
+              icon: const Icon(Icons.image_outlined),
             ),
             const Spacer(),
             IconButton(
@@ -446,6 +486,26 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                     ),
                                   ),
                                   // pinos de notas
+                                  // imagens
+                                  ..._imageNotes.indexed.map((entry) {
+                                    final idx = entry.$1;
+                                    final note = entry.$2;
+                                    return ImageNoteWidget(
+                                      key: ValueKey('nb-img-$idx-$_pageIndex'),
+                                      note: note,
+                                      canvasSize: _paperSize,
+                                      onChanged: (updated) async {
+                                        setState(() => _imageNotes[idx] = updated);
+                                        await _savePage();
+                                      },
+                                      onDelete: () async {
+                                        setState(() => _imageNotes.removeAt(idx));
+                                        await _savePage();
+                                      },
+                                    );
+                                  }),
+
+                                  // pinos de notas (texto)
                                   ..._textNotes.indexed.map((entry) {
                                     final idx = entry.$1;
                                     final note = entry.$2;

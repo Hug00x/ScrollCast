@@ -1,6 +1,10 @@
 import 'dart:typed_data';
+import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show MatrixUtils;
+import 'package:path/path.dart' as p;
+import 'package:image_picker/image_picker.dart';
+// MatrixUtils is available through material.dart; explicit import removed to silence analyzer
 
 import '../widgets/text_note_bubble.dart';
 import '../../main.dart';
@@ -9,6 +13,7 @@ import '../widgets/drawing_canvas.dart';
 import '../widgets/annotation_toolbar.dart';
 import '../widgets/whatsapp_mic_button.dart';
 import '../widgets/audio_pin_layer.dart';
+import '../widgets/image_note_widget.dart';
 
 class PdfViewerArgs {
   final String pdfId;
@@ -37,6 +42,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   final _undo = <Stroke>[];
   final _audioNotes = <AudioNote>[];
   final _textNotes = <TextNote>[];
+  final _imageNotes = <ImageNote>[];
 
   Size _imgSize = const Size(1, 1);
 
@@ -106,6 +112,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     _textNotes
       ..clear()
       ..addAll(ann?.textNotes ?? const []);
+    _imageNotes
+      ..clear()
+      ..addAll(ann?.imageNotes ?? const []);
 
     // reset só do enquadramento/zoom e HUD de nota — NÃO tocar no stylusEverSeen
     _ivController.value = Matrix4.identity();
@@ -138,6 +147,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
         strokes: List.of(_strokes),
         audioNotes: List.of(_audioNotes),
         textNotes: List.of(_textNotes),
+        imageNotes: List.of(_imageNotes),
       ),
     );
   }
@@ -205,10 +215,37 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
         ],
       ),
     );
-    if (text == null || text.isEmpty) return;
+  if (text == null || text.isEmpty) return;
+  // guard against using the BuildContext after async gaps
+  if (!mounted) return;
 
-    final center = _contentCenter(context);
+  final center = _contentCenter(context);
     setState(() => _textNotes.add(TextNote(position: center, text: text)));
+    await _savePage();
+  }
+
+  Future<void> _importImage(BuildContext ctx) async {
+    final picker = ImagePicker();
+    final x = await picker.pickImage(source: ImageSource.gallery);
+    if (x == null) return;
+
+    final src = x.path;
+    final storage = ServiceLocator.instance.storage;
+    final root = await storage.appRoot();
+    final imagesDir = p.join(root, 'images');
+    // ensure dir exists
+    try {
+      final d = Directory(imagesDir);
+      if (!await d.exists()) await d.create(recursive: true);
+    } catch (_) {}
+    final ext = p.extension(src).replaceFirst('.', '');
+    final dest = await storage.createUniqueFilePath(imagesDir, extension: ext.isEmpty ? 'jpg' : ext);
+    await storage.copyFile(src, dest);
+
+    if (!mounted) return;
+    final center = _contentCenter(ctx);
+    final defaultSize = math.min(_imgSize.width, _imgSize.height) * 0.3;
+    setState(() => _imageNotes.add(ImageNote(position: center, filePath: dest, width: defaultSize, height: defaultSize)));
     await _savePage();
   }
 
@@ -309,6 +346,11 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
               tooltip: 'Nova nota de texto',
               onPressed: () => _createTextNote(context),
               icon: const Icon(Icons.notes_rounded),
+            ),
+            IconButton.filledTonal(
+              tooltip: 'Importar imagem',
+              onPressed: () => _importImage(context),
+              icon: const Icon(Icons.image_outlined),
             ),
             const Spacer(),
             IconButton(
@@ -434,6 +476,26 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                     ),
                                   ),
                                   // Pinos das notas — abrem painel inferior
+                                  // imagens
+                                  ..._imageNotes.indexed.map((entry) {
+                                    final idx = entry.$1;
+                                    final note = entry.$2;
+                                    return ImageNoteWidget(
+                                      key: ValueKey('img-$idx-$_pageIndex'),
+                                      note: note,
+                                      canvasSize: _imgSize,
+                                      onChanged: (updated) async {
+                                        setState(() => _imageNotes[idx] = updated);
+                                        await _savePage();
+                                      },
+                                      onDelete: () async {
+                                        setState(() => _imageNotes.removeAt(idx));
+                                        await _savePage();
+                                      },
+                                    );
+                                  }),
+
+                                  // notas de texto
                                   ..._textNotes.indexed.map((entry) {
                                     final idx = entry.$1;
                                     final note = entry.$2;
