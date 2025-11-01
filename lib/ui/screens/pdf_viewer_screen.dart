@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show MatrixUtils;
 
 import '../widgets/text_note_bubble.dart';
-// import '../widgets/draggable_note_panel.dart'; // ⬅️ já não usamos
 import '../../main.dart';
 import '../../models/annotations.dart';
 import '../widgets/drawing_canvas.dart';
@@ -53,11 +52,15 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   bool _handMode = false;
   bool _loading = true;
 
-  // painel de nota (agora: painel inferior fixo)
+  // ===== Stylus =====
+  bool _stylusDown = false;      // estado momentâneo
+  bool _stylusEverSeen = false;  // persiste até sair deste ecrã
+
+  // notas (painel inferior)
   int? _openedNoteIndex;
   final _noteEditor = TextEditingController();
 
-  // medir a área do “papel” (para Audio HUD bounds)
+  // medir a área do “papel” (para limitar HUD de áudio)
   final GlobalKey _paperKey = GlobalKey();
   Rect? _paperRect;
 
@@ -104,12 +107,12 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
       ..clear()
       ..addAll(ann?.textNotes ?? const []);
 
+    // reset só do enquadramento/zoom e HUD de nota — NÃO tocar no stylusEverSeen
     _ivController.value = Matrix4.identity();
     _currentScale = 1.0;
     _handMode = false;
     _canvasIgnore = false;
 
-    // fecha painel de nota
     _openedNoteIndex = null;
     _noteEditor.clear();
 
@@ -209,7 +212,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     await _savePage();
   }
 
-  // abrir/fechar painel
+  // abrir/fechar painel de nota
   void _openNoteSheet(int index) {
     _openedNoteIndex = index;
     _noteEditor.text = _textNotes[index].text;
@@ -287,14 +290,18 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
               tooltip: 'Anterior',
             ),
             Tooltip(
-              message: _handMode ? 'Modo mão (arrastar) ativo' : 'Ativar modo mão',
+              message: _stylusEverSeen
+                  ? 'Caneta detetada — os dedos servem para arrastar/zoom'
+                  : (_handMode ? 'Modo mão (arrastar) ativo' : 'Ativar modo mão'),
               child: IconButton.filledTonal(
-                onPressed: () {
-                  setState(() {
-                    _handMode = !_handMode;
-                    _canvasIgnore = _handMode;
-                  });
-                },
+                onPressed: _stylusEverSeen
+                    ? null // desativado depois de detetar caneta (persistente até sair do ecrã)
+                    : () {
+                        setState(() {
+                          _handMode = !_handMode;
+                          _canvasIgnore = _handMode;
+                        });
+                      },
                 icon: Icon(_handMode ? Icons.pan_tool_alt : Icons.brush),
               ),
             ),
@@ -341,7 +348,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                       builder: (context, constraints) {
                         return InteractiveViewer(
                           transformationController: _ivController,
-                          panEnabled: _handMode,
+                          // quando a caneta está a tocar, desativar pan para evitar que a caneta arraste
+                          // caso contrário, se já vimos caneta, dedos podem pan/zoom; senão usar _handMode
+                          panEnabled: !_stylusDown && (_stylusEverSeen ? true : _handMode),
                           minScale: 1.0,
                           maxScale: 5.0,
                           boundaryMargin: EdgeInsets.zero,
@@ -372,26 +381,37 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                       },
                                     ),
                                   ),
+                                  // Canvas — caneta desenha; dedos não desenham após deteção
                                   Positioned.fill(
                                     child: IgnorePointer(
-                                      ignoring: _handMode || _canvasIgnore,
+                                      // quando stylus não está a tocar e estás em 'mão' ou multi-toque, ignora
+                                      ignoring: (!_stylusDown) && (_handMode || _canvasIgnore),
                                       child: DrawingCanvas(
                                         key: ValueKey('canvas-$_pageIndex'),
                                         strokes: _strokes,
                                         mode: _mode,
                                         strokeWidth: _width,
                                         strokeColor: _color,
+                                        stylusOnly: _stylusEverSeen,
                                         onStrokeEnd: (s) async {
                                           setState(() => _strokes.add(s));
                                           await _savePage();
                                         },
                                         onPointerCountChanged: (count) {
-                                          final ignore = _handMode || count >= 2;
+                                          final ignore = (_handMode || count >= 2);
                                           if (ignore != _canvasIgnore) setState(() => _canvasIgnore = ignore);
                                         },
                                         eraserWidthPreview: _eraserWidth,
                                         onStrokesChanged: () async {
                                           await _savePage();
+                                        },
+                                        onStylusContact: (down) {
+                                          if (down && !_stylusEverSeen) {
+                                            if (mounted) setState(() => _stylusEverSeen = true);
+                                          }
+                                          if (down != _stylusDown) {
+                                            if (mounted) setState(() => _stylusDown = down);
+                                          }
                                         },
                                       ),
                                     ),
@@ -413,7 +433,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                       allowedBounds: _paperRect,
                                     ),
                                   ),
-                                  // Pinos das notas — agora abrem painel inferior
+                                  // Pinos das notas — abrem painel inferior
                                   ..._textNotes.indexed.map((entry) {
                                     final idx = entry.$1;
                                     final note = entry.$2;
@@ -448,7 +468,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
             onChanged: _applyNoteText,
             onClose: _closeNoteSheet,
             onDelete: _deleteOpenedNote,
-            bottomBarHeight: 64, // igual ao BottomAppBar.height
+            bottomBarHeight: 64,
           ),
         ],
       ),
@@ -478,7 +498,7 @@ class _NoteBottomSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final pad = MediaQuery.of(context).padding.bottom;
     final base = Theme.of(context).colorScheme;
-    final height = 140.0;
+    const height = 140.0;
 
     return Align(
       alignment: Alignment.bottomCenter,

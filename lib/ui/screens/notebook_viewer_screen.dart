@@ -9,7 +9,6 @@ import '../widgets/annotation_toolbar.dart';
 import '../widgets/whatsapp_mic_button.dart';
 import '../widgets/audio_pin_layer.dart';
 import '../widgets/text_note_bubble.dart';
-// import '../widgets/draggable_note_panel.dart'; // ⬅️ já não usamos
 
 class NotebookViewerArgs {
   final String notebookId;
@@ -47,6 +46,10 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   double _currentScale = 1.0;
   bool _handMode = false;
 
+  // ===== Stylus =====
+  bool _stylusDown = false;
+  bool _stylusEverSeen = false;
+
   // painel inferior de nota
   int? _openedNoteIndex;
   final _noteEditor = TextEditingController();
@@ -72,8 +75,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   Future<void> _initNotebook() async {
     final existing = await ServiceLocator.instance.db.getAllAnnotations(_nbId);
     if (existing.isNotEmpty) {
-      _pageCount =
-          (existing.map((e) => e.pageIndex).fold<int>(0, (m, i) => i > m ? i : m)) + 1;
+      _pageCount = (existing.map((e) => e.pageIndex).fold<int>(0, (m, i) => i > m ? i : m)) + 1;
     } else {
       _pageCount = 1;
     }
@@ -95,6 +97,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       ..clear()
       ..addAll(ann?.textNotes ?? const []);
 
+    // reset enquadramento/UI mas NÃO mexer no _stylusEverSeen
     _ivController.value = Matrix4.identity();
     _currentScale = 1.0;
     _handMode = false;
@@ -274,14 +277,18 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
               tooltip: 'Anterior',
             ),
             Tooltip(
-              message: _handMode ? 'Modo mão (arrastar) ativo' : 'Ativar modo mão',
+              message: _stylusEverSeen
+                  ? 'Caneta detetada — os dedos servem para arrastar/zoom'
+                  : (_handMode ? 'Modo mão (arrastar) ativo' : 'Ativar modo mão'),
               child: IconButton.filledTonal(
-                onPressed: () {
-                  setState(() {
-                    _handMode = !_handMode;
-                    _canvasIgnore = _handMode;
-                  });
-                },
+                onPressed: _stylusEverSeen
+                    ? null
+                    : () {
+                        setState(() {
+                          _handMode = !_handMode;
+                          _canvasIgnore = _handMode;
+                        });
+                      },
                 icon: Icon(_handMode ? Icons.pan_tool_alt : Icons.brush),
               ),
             ),
@@ -337,7 +344,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                       builder: (context, constraints) {
                         return InteractiveViewer(
                           transformationController: _ivController,
-                          panEnabled: _handMode,
+                          // quando a caneta está a tocar, desativar pan para evitar que a caneta arraste
+                          panEnabled: !_stylusDown && (_stylusEverSeen ? true : _handMode),
                           minScale: 1.0,
                           maxScale: 5.0,
                           boundaryMargin: EdgeInsets.zero,
@@ -382,22 +390,23 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                       },
                                     ),
                                   ),
-                                  // desenho
+                                  // Canvas — caneta desenha; dedos não
                                   Positioned.fill(
                                     child: IgnorePointer(
-                                      ignoring: _handMode || _canvasIgnore,
+                                      ignoring: (!_stylusDown) && (_handMode || _canvasIgnore),
                                       child: DrawingCanvas(
                                         key: ValueKey('nb-canvas-$_pageIndex'),
                                         strokes: _strokes,
                                         mode: _mode,
                                         strokeWidth: _width,
                                         strokeColor: _color,
+                                        stylusOnly: _stylusEverSeen,
                                         onStrokeEnd: (s) async {
                                           setState(() => _strokes.add(s));
                                           await _savePage();
                                         },
                                         onPointerCountChanged: (count) {
-                                          final ignore = _handMode || count >= 2;
+                                          final ignore = (_handMode || count >= 2);
                                           if (ignore != _canvasIgnore) {
                                             setState(() => _canvasIgnore = ignore);
                                           }
@@ -405,6 +414,14 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                         eraserWidthPreview: _eraserWidth,
                                         onStrokesChanged: () async {
                                           await _savePage();
+                                        },
+                                        onStylusContact: (down) {
+                                          if (down && !_stylusEverSeen) {
+                                            if (mounted) setState(() => _stylusEverSeen = true);
+                                          }
+                                          if (down != _stylusDown) {
+                                            if (mounted) setState(() => _stylusDown = down);
+                                          }
                                         },
                                       ),
                                     ),
@@ -427,7 +444,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                       allowedBounds: _paperRect,
                                     ),
                                   ),
-                                  // pinos de notas → abrem painel inferior
+                                  // pinos de notas
                                   ..._textNotes.indexed.map((entry) {
                                     final idx = entry.$1;
                                     final note = entry.$2;
@@ -491,7 +508,7 @@ class _NoteBottomSheet extends StatelessWidget {
   Widget build(BuildContext context) {
     final pad = MediaQuery.of(context).padding.bottom;
     final base = Theme.of(context).colorScheme;
-    final height = 140.0;
+    const height = 140.0;
 
     return Align(
       alignment: Alignment.bottomCenter,

@@ -73,20 +73,34 @@ class _ProfileScreenState extends State<ProfileScreen> {
     setState(() => _accounts = items);
   }
 
-  // --------- FIX fantasma: limpar estado user-scoped + reset navegação ----------
- Future<void> _afterAuthIdentityChange({String goTo = OnboardingStartScreen.route}) async {
-  try { await Hive.close(); } catch (_) {}
-  try {
-    PaintingBinding.instance.imageCache.clear();
-    PaintingBinding.instance.imageCache.clearLiveImages();
-  } catch (_) {}
-  if (!mounted) return;
-  Navigator.of(context).pushNamedAndRemoveUntil(goTo, (_) => false);
-}
+  Future<void> _afterAuthIdentityChange({String goTo = OnboardingStartScreen.route}) async {
+    try { await Hive.close(); } catch (_) {}
+    try {
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+    } catch (_) {}
+    if (!mounted) return;
+    Navigator.of(context).pushNamedAndRemoveUntil(goTo, (_) => false);
+  }
+
+  Future<void> _showErrorDialog(String message, {String title = 'Erro'}) async {
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+        ],
+      ),
+    );
+  }
 
   Future<void> _switchToAccount(_KnownAccount acc) async {
     final auth = FirebaseAuth.instance;
-    if (auth.currentUser?.uid == acc.uid) return;
+    final prevUid = auth.currentUser?.uid; // UID antes da tentativa
+    if (prevUid == acc.uid) return;
 
     try {
       if (acc.isGoogle) {
@@ -97,8 +111,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
         await ServiceLocator.instance.auth.signInWithEmail(acc.email!, pass);
       }
 
-      final u = auth.currentUser;
-      if (u != null && _box != null) {
+      // Verifica se a identidade realmente mudou
+      final newUid = FirebaseAuth.instance.currentUser?.uid;
+      final success = newUid != null && newUid != prevUid;
+
+      if (!success) {
+        // Falhou (ex.: password errada mas sem exceção)
+        if (!acc.isGoogle) {
+          await _showErrorDialog(
+            'Password incorreta (ou credenciais inválidas).',
+            title: 'Autenticação falhou',
+          );
+        } else {
+          _snack('Não foi possível entrar com Google.');
+        }
+        return; // ← mantém-se na ProfileScreen
+      }
+
+      // Sucesso → atualizar box e reiniciar app state
+      final u = auth.currentUser!;
+      if (_box != null) {
         final prev = _box!.get(u.uid);
         final existingPath = (prev is Map && prev['localAvatarPath'] is String)
             ? prev['localAvatarPath'] as String?
@@ -107,7 +139,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
         await _box!.put(ka.uid, ka.toMap());
       }
 
-      await _afterAuthIdentityChange(goTo: '/'); // ← força reload já com conta Y
+      await _afterAuthIdentityChange(goTo: '/'); // ← vai para a Library
+    } on FirebaseAuthException catch (e) {
+      // Erros típicos de credenciais
+      final code = e.code;
+      if (!acc.isGoogle &&
+          (code == 'wrong-password' || code == 'invalid-credential' || code == 'user-not-found')) {
+        await _showErrorDialog('Password incorreta (ou credenciais inválidas).', title: 'Autenticação falhou');
+        return; // ← mantém-se na ProfileScreen
+      } else {
+        _snack('Falha ao trocar para ${acc.email ?? acc.displayName}: ${e.message ?? e.code}');
+      }
     } catch (e) {
       _snack('Falha ao trocar para ${acc.email ?? acc.displayName}: $e');
     }
@@ -125,7 +167,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       await u.delete();
       await _box?.delete(u.uid);
       _snack('Conta apagada.');
-      await _afterAuthIdentityChange(goTo: '/signin');
+      await _afterAuthIdentityChange(goTo: OnboardingStartScreen.route);
     } on FirebaseAuthException catch (e) {
       if (e.code == 'requires-recent-login') {
         final success = await _reauthenticateFlow(u);
@@ -134,7 +176,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             await u.delete();
             await _box?.delete(u.uid);
             _snack('Conta apagada.');
-            await _afterAuthIdentityChange(goTo: '/signin');
+            await _afterAuthIdentityChange(goTo: OnboardingStartScreen.route);
           } catch (e2) {
             _snack('Falha ao apagar após reautenticação: $e2');
           }
@@ -261,33 +303,43 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final c = TextEditingController();
     return showDialog<String>(
       context: ctx,
-      builder: (dctx) => AlertDialog(
-        title: Text(title),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(email, style: Theme.of(ctx).textTheme.bodySmall),
+      builder: (dctx) {
+        bool _obscure = true;
+        return StatefulBuilder(
+          builder: (_, setSt) => AlertDialog(
+            title: Text(title),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(email, style: Theme.of(ctx).textTheme.bodySmall),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: c,
+                  autofocus: true,
+                  obscureText: _obscure,
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      tooltip: _obscure ? 'Mostrar' : 'Ocultar',
+                      icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
+                      onPressed: () => setSt(() => _obscure = !_obscure),
+                    ),
+                  ),
+                  onSubmitted: (_) => Navigator.pop(dctx, c.text),
+                ),
+              ],
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: c,
-              autofocus: true,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'Password',
-                border: OutlineInputBorder(),
-              ),
-              onSubmitted: (_) => Navigator.pop(dctx, c.text),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.pop(dctx, c.text), child: const Text('Entrar')),
-        ],
-      ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dctx), child: const Text('Cancelar')),
+              FilledButton(onPressed: () => Navigator.pop(dctx, c.text), child: const Text('Entrar')),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -300,6 +352,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
       builder: (dctx) => StatefulBuilder(
         builder: (_, setSt) => AlertDialog(
           title: const Text('Apagar conta'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Para confirmar, escreve exatamente: confirmar'),
+              const SizedBox(height: 8),
+              TextField(
+                controller: t,
+                autofocus: true,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: 'confirmar',
+                ),
+                onChanged: (_) => setSt(() {}),
+                onSubmitted: (_) {
+                  if (_matches(t.text)) Navigator.pop(dctx, true);
+                },
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancelar')),
+            FilledButton(
+              onPressed: _matches(t.text) ? () => Navigator.pop(dctx, true) : null,
+              child: const Text('Apagar'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<bool?> _confirmClearData(BuildContext ctx) async {
+    final t = TextEditingController();
+    bool _matches(String s) => s.trim().toLowerCase() == 'confirmar';
+
+    return showDialog<bool>(
+      context: ctx,
+      builder: (dctx) => StatefulBuilder(
+        builder: (_, setSt) => AlertDialog(
+          title: const Text('Apagar dados'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -369,7 +461,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   ),
                   const SizedBox(height: 12),
 
-                  // Secção: Perfil
                   _HelpSection(
                     icon: Icons.person_outline_rounded,
                     title: 'Este ecrã (Perfil)',
@@ -391,7 +482,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Secção: Anotações
                   _HelpSection(
                     icon: Icons.brush_rounded,
                     title: 'Anotações (PDFs e Cadernos)',
@@ -413,7 +503,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                   const SizedBox(height: 16),
 
-                  // Secção: Dicas
                   _HelpSection(
                     icon: Icons.lightbulb_outline_rounded,
                     title: 'Dicas rápidas',
@@ -445,6 +534,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final current = FirebaseAuth.instance.currentUser;
     final currentUid = current?.uid;
     final isGoogle = current?.providerData.any((p) => p.providerId == 'google.com') ?? false;
+    final isGuest = (current == null) || (current.isAnonymous ?? false);
 
     final others = _accounts.where((a) => a.uid != currentUid).toList();
 
@@ -458,7 +548,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           Center(child: Text('Sessão ativa', style: Theme.of(context).textTheme.labelMedium)),
           const SizedBox(height: 24),
 
-          // Tema
           SwitchListTile(
             title: const Text('Tema claro'),
             value: isLight,
@@ -466,7 +555,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             secondary: const Icon(Icons.brightness_6_rounded),
           ),
 
-          // === AJUDA (logo após tema claro) ===
           ListTile(
             leading: const Icon(Icons.help_outline_rounded),
             title: const Text('Ajuda'),
@@ -474,7 +562,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onTap: _openHelp,
           ),
 
-          if (!isGoogle) ...[
+          if (!isGoogle && !isGuest) ...[
             const Divider(),
             ListTile(
               leading: const Icon(Icons.image_rounded),
@@ -490,7 +578,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           const Divider(),
 
-          // Trocar de conta
           ListTile(
             leading: const Icon(Icons.swap_horiz_rounded),
             title: const Text('Trocar de conta'),
@@ -530,34 +617,77 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   },
           ),
 
-          // Terminar sessão
-         ListTile(
-  leading: const Icon(Icons.logout_rounded),
-  title: const Text('Terminar sessão'),
-  onTap: () async {
-    await ServiceLocator.instance.auth.signOut();
-    await _afterAuthIdentityChange(goTo: OnboardingStartScreen.route);
-  },
-),
+          ListTile(
+            leading: const Icon(Icons.logout_rounded),
+            title: const Text('Terminar sessão'),
+            onTap: () async {
+              await ServiceLocator.instance.auth.signOut();
+              await _afterAuthIdentityChange(goTo: OnboardingStartScreen.route);
+            },
+          ),
 
           const Divider(),
 
-          // Apagar conta
-          ListTile(
-            leading: const Icon(Icons.delete_forever_rounded),
-            title: const Text('Apagar conta'),
-            subtitle: const Text('Isto é definitivo. Vai pedir confirmação.'),
-            textColor: Theme.of(context).colorScheme.error,
-            iconColor: Theme.of(context).colorScheme.error,
-            onTap: _deleteCurrentAccount,
-          ),
+          if (isGuest)
+            ListTile(
+              leading: const Icon(Icons.delete_sweep_rounded),
+              title: const Text('Apagar dados'),
+              subtitle: const Text('Isto é definitivo. Vai pedir confirmação.'),
+              textColor: Theme.of(context).colorScheme.error,
+              iconColor: Theme.of(context).colorScheme.error,
+              onTap: () async {
+                final ok = await _confirmClearData(context);
+                if (ok == true) {
+                  await _clearGuestData();
+                }
+              },
+            )
+          else
+            ListTile(
+              leading: const Icon(Icons.delete_forever_rounded),
+              title: const Text('Apagar conta'),
+              subtitle: const Text('Isto é definitivo. Vai pedir confirmação.'),
+              textColor: Theme.of(context).colorScheme.error,
+              iconColor: Theme.of(context).colorScheme.error,
+              onTap: _deleteCurrentAccount,
+            ),
         ],
       ),
     );
   }
-}
 
-// =================== Avatares ===================
+  Future<void> _clearGuestData() async {
+    final uid = ServiceLocator.instance.auth.currentUid ?? '_anon';
+    final boxes = <String>[
+      'pdfs_$uid',
+      'annotations_$uid',
+      'favorites_$uid',
+      'notebooks_$uid',
+      'notebook_pages_$uid',
+      'nb_favorites_$uid',
+      _boxName,
+    ];
+    for (final name in boxes) {
+      try {
+        final b = Hive.isBoxOpen(name) ? Hive.box(name) : await Hive.openBox(name);
+        if (name == _boxName) {
+          await b.delete(uid);
+        } else {
+          await b.clear();
+        }
+      } catch (_) {}
+    }
+    await _deleteAllAvatarsFor(uid);
+
+    try {
+      PaintingBinding.instance.imageCache.clear();
+      PaintingBinding.instance.imageCache.clearLiveImages();
+    } catch (_) {}
+
+    _snack('Dados do convidado limpos.');
+    await _afterAuthIdentityChange(goTo: OnboardingStartScreen.route);
+  }
+}
 
 class _AccountAvatar extends StatelessWidget {
   final _KnownAccount a;
@@ -656,8 +786,6 @@ class _ProfileAvatar extends StatelessWidget {
   }
 }
 
-// =================== Modelo ===================
-
 class _KnownAccount {
   final String uid;
   final String? email;
@@ -728,8 +856,6 @@ class _KnownAccount {
             : null,
       );
 }
-
-// ======= helpers visuais da ajuda =======
 
 class _HelpSection extends StatelessWidget {
   final IconData icon;

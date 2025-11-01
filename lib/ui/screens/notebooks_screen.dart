@@ -1,5 +1,7 @@
 // lib/ui/screens/notebooks_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../main.dart';
@@ -18,29 +20,53 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
   List<NotebookModel> _items = [];
   bool _busy = false;
 
+  // ===== Favoritos de caderno (Hive local) =====
+  Box? _favBox;
+  Set<String> _favIds = <String>{};
+  StreamSubscription<BoxEvent>? _favWatchSub;
+  String get _favBoxName =>
+      'nb_favorites_${ServiceLocator.instance.auth.currentUid ?? "_anon"}';
+
   @override
   void initState() {
     super.initState();
-    _reload();
+    _initFavs().then((_) => _reload());
+  }
+
+  Future<void> _initFavs() async {
+    _favBox = Hive.isBoxOpen(_favBoxName)
+        ? Hive.box(_favBoxName)
+        : await Hive.openBox(_favBoxName);
+    _pullFavIds();
+
+    // Rebuild sempre que houver mudanças na box
+    _favWatchSub?.cancel();
+    _favWatchSub = _favBox!.watch().listen((_) {
+      _pullFavIds();
+      if (mounted) setState(() {});
+    });
+  }
+
+  void _pullFavIds() {
+    _favIds = _favBox?.keys.whereType<String>().toSet() ?? <String>{};
   }
 
   Future<void> _reload() async {
     final db = ServiceLocator.instance.db;
 
-    // ✅ Se _folder == null, mostra APENAS cadernos da raiz.
-    // Caso contrário, mostra só os da pasta selecionada.
     List<NotebookModel> items;
     if (_folder == null) {
-      items = await db.listNotebooks(); // todos…
+      items = await db.listNotebooks();
       items = items
           .where((n) => n.folder == null || n.folder!.isEmpty)
-          .toList(); // …filtrados para raiz
+          .toList();
     } else {
       items = await db.listNotebooks(folder: _folder);
     }
     items.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
 
     final folders = await db.listNotebookFolders();
+    if (!mounted) return;
     setState(() {
       _items = items;
       _folders = folders;
@@ -74,7 +100,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       id: id,
       name: nameCtrl.text.trim().isEmpty ? 'Caderno' : nameCtrl.text.trim(),
       folder: folderCtrl.text.trim().isEmpty ? null : folderCtrl.text.trim(),
-      pageCount: 1, // começa com 1 página vazia
+      pageCount: 1,
       lastOpened: DateTime.now(),
     );
 
@@ -97,7 +123,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Apagar caderno'),
-        content: Text('Apagar "${n.name}" e todas as páginas?'),
+        content: Text( 'Tens a certeza que queres apagar "${n.name}"?\n'
+          'Isto remove o caderno, as anotações e os áudios associados.',),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
           FilledButton.tonal(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apagar')),
@@ -107,13 +134,45 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     if (ok != true) return;
 
     setState(() => _busy = true);
+    await _favBox?.delete(n.id); // remove também dos favoritos
     await ServiceLocator.instance.db.deleteNotebook(n.id);
     await _reload();
     if (mounted) setState(() => _busy = false);
   }
 
+  Future<void> _toggleFavorite(NotebookModel n) async {
+    if (_favBox == null) return;
+    final isFav = _favIds.contains(n.id);
+    if (isFav) {
+      await _favBox!.delete(n.id);
+    } else {
+      await _favBox!.put(n.id, true);
+    }
+  }
+
+  Shader _titleGradient(Rect bounds) {
+    return const LinearGradient(
+      colors: [
+        Color(0xFFFFC107),
+        Color(0xFF4CAF50),
+        Color(0xFF26C6DA),
+      ],
+      begin: Alignment.centerLeft,
+      end: Alignment.centerRight,
+    ).createShader(bounds);
+  }
+
+  @override
+  void dispose() {
+    _favWatchSub?.cancel();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final Color _unfavColor = cs.onSurfaceVariant.withOpacity(0.55);
+
     final chips = <Widget>[
       ChoiceChip(
         label: const Text('Sem Pasta'),
@@ -156,9 +215,31 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                         separatorBuilder: (_, __) => const Divider(height: 1),
                         itemBuilder: (_, i) {
                           final n = _items[i];
+                          final isFav = _favIds.contains(n.id);
                           return ListTile(
-                            leading: const Icon(Icons.book_rounded),
-                            title: Text(n.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                            leading: InkResponse(
+                              onTap: () => _toggleFavorite(n),
+                              radius: 24,
+                              child: isFav
+                                  ? ShaderMask(
+                                      shaderCallback: _titleGradient,
+                                      blendMode: BlendMode.srcIn,
+                                      child: const Icon(Icons.star, size: 24),
+                                    )
+                                  : Icon(Icons.star_border, size: 24, color: _unfavColor),
+                            ),
+                            title: ShaderMask(
+                              shaderCallback: _titleGradient,
+                              blendMode: BlendMode.srcIn,
+                              child: Text(
+                                n.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                              ),
+                            ),
                             subtitle: Text('${n.pageCount} páginas • ${n.folder ?? "raiz"}'),
                             onTap: () {
                               Navigator.push(
@@ -170,10 +251,16 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                                 ),
                               ).then((_) => _reload());
                             },
-                            trailing: IconButton(
-                              tooltip: 'Apagar',
-                              onPressed: () => _deleteNotebook(n),
-                              icon: const Icon(Icons.delete_outline_rounded),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                IconButton(
+                                  tooltip: 'Apagar',
+                                  onPressed: () => _deleteNotebook(n),
+                                  icon: const Icon(Icons.delete_outline_rounded),
+                                ),
+                                const Icon(Icons.chevron_right),
+                              ],
                             ),
                           );
                         },

@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../models/annotations.dart';
 
@@ -16,8 +17,14 @@ class DrawingCanvas extends StatefulWidget {
   // raio visual da borracha (recebe do toolbar)
   final double? eraserWidthPreview;
 
-  // >>> NOVO: avisa o pai quando a borracha modificar os traços
+  // avisa o pai quando a borracha modificar os traços
   final VoidCallback? onStrokesChanged;
+
+  // >>> NOVO: se true, só caneta (stylus) pode desenhar; dedos são ignorados
+  final bool stylusOnly;
+
+  // >>> NOVO: callback quando stylus toca/levanta
+  final void Function(bool isDown)? onStylusContact;
 
   const DrawingCanvas({
     super.key,
@@ -28,7 +35,9 @@ class DrawingCanvas extends StatefulWidget {
     required this.onStrokeEnd,
     this.onPointerCountChanged,
     this.eraserWidthPreview,
-    this.onStrokesChanged, // NOVO
+    this.onStrokesChanged,
+    this.stylusOnly = false,
+    this.onStylusContact,
   });
 
   @override
@@ -37,7 +46,12 @@ class DrawingCanvas extends StatefulWidget {
 
 class _DrawingCanvasState extends State<DrawingCanvas> {
   final _activePoints = <int, Offset>{}; // pointer -> pos
+  // todos os pointers (aceites ou não) — usado para contar (p.ex. 2 dedos => zoom)
+  final _allPoints = <int, Offset>{};
   final _currentLine = <Offset>[];
+
+  // rastreia quais pointers são stylus
+  final _stylusPointers = <int>{};
 
   // preview da borracha
   Offset? _eraserCenter;
@@ -45,14 +59,38 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   // raio base (caso não venha do toolbar)
   static const double _fallbackEraserRadius = 18;
 
-  void _notifyCount() => widget.onPointerCountChanged?.call(_activePoints.length);
+  void _notifyCount() => widget.onPointerCountChanged?.call(_allPoints.length);
+
+
+  bool _isStylus(PointerDownEvent e) =>
+      e.kind == PointerDeviceKind.stylus || e.kind == PointerDeviceKind.invertedStylus;
+
+  bool _shouldAcceptDown(PointerDownEvent e) {
+    if (!widget.stylusOnly) return true;
+    return _isStylus(e); // em modo “só caneta”, ignora dedos
+  }
 
   @override
   Widget build(BuildContext context) {
     final isEraser = widget.mode == StrokeMode.eraser;
 
     return Listener(
+      behavior: HitTestBehavior.opaque,
       onPointerDown: (e) {
+        // marca stylus
+        if (_isStylus(e)) {
+          _stylusPointers.add(e.pointer);
+          widget.onStylusContact?.call(true);
+        }
+
+        // sempre contar o pointer (p.ex., 2 dedos -> zoom), mesmo que não seja aceite para desenhar
+        _allPoints[e.pointer] = e.localPosition;
+        if (!_shouldAcceptDown(e)) {
+          _notifyCount();
+          return;
+        }
+
+        // apenas pointers aceite para desenho vão para _activePoints
         _activePoints[e.pointer] = e.localPosition;
         _notifyCount();
 
@@ -68,6 +106,14 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         }
       },
       onPointerMove: (e) {
+        // atualiza posição de todos os pointers para contagem/HUD
+        _allPoints[e.pointer] = e.localPosition;
+
+        // se o pointer não foi aceite (ex.: dedo em modo stylusOnly), ignora
+        final wasAccepted = _activePoints.containsKey(e.pointer);
+        if (!wasAccepted && widget.stylusOnly) return;
+
+        // actualiza posição apenas dos pointers aceite para desenho
         _activePoints[e.pointer] = e.localPosition;
 
         if (_activePoints.length == 1) {
@@ -84,10 +130,16 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         }
       },
       onPointerUp: (e) async {
-        _activePoints.remove(e.pointer);
+        // stylus up?
+        if (_stylusPointers.remove(e.pointer) && _stylusPointers.isEmpty) {
+          widget.onStylusContact?.call(false);
+        }
+
+        final wasAccepted = _activePoints.remove(e.pointer) != null;
+        _allPoints.remove(e.pointer);
         _notifyCount();
 
-        if (_currentLine.length > 1 && !isEraser) {
+        if (wasAccepted && _currentLine.length > 1 && !isEraser) {
           final stroke = Stroke(
             points: List<Offset>.from(_currentLine),
             width: widget.mode == StrokeMode.highlighter ? widget.strokeWidth * 1.35 : widget.strokeWidth,
@@ -103,7 +155,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         _eraserCenter = null;
       },
       onPointerCancel: (e) {
+        _stylusPointers.remove(e.pointer);
         _activePoints.remove(e.pointer);
+        _allPoints.remove(e.pointer);
         _currentLine.clear();
         _eraserCenter = null;
         _notifyCount();
@@ -180,7 +234,6 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     }
 
     if (anyChange) {
-      // avisa o pai para persistir no storage (evita perder ao voltar)
       widget.onStrokesChanged?.call();
     }
   }
