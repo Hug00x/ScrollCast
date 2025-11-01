@@ -68,11 +68,11 @@ class _AudioPinState extends State<AudioPin> with SingleTickerProviderStateMixin
           padding: _expanded ? const EdgeInsets.only(right: 10) : EdgeInsets.zero,
           decoration: _expanded
               ? BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface.withOpacity(0.95),
+                  color: Theme.of(context).colorScheme.surface.withAlpha((0.95 * 255).round()),
                   borderRadius: BorderRadius.circular(24),
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.25),
+                      color: Colors.black.withAlpha((0.25 * 255).round()),
                       blurRadius: 10,
                       offset: const Offset(0, 4),
                     ),
@@ -93,7 +93,7 @@ class _AudioPinState extends State<AudioPin> with SingleTickerProviderStateMixin
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.25),
+                      color: Colors.black.withAlpha((0.25 * 255).round()),
                       blurRadius: 8,
                     )
                   ],

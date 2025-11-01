@@ -113,7 +113,7 @@ class PdfServiceImpl implements PdfService {
         ..strokeCap = ui.StrokeCap.round
         ..strokeJoin = ui.StrokeJoin.round
         ..strokeWidth = s.mode == StrokeMode.highlighter ? s.width * 1.6 : s.width
-        ..color = ui.Color(s.color).withOpacity(s.mode == StrokeMode.highlighter ? 0.35 : 1.0);
+  ..color = ui.Color(s.color).withAlpha(((s.mode == StrokeMode.highlighter ? 0.35 : 1.0) * 255).round());
 
       for (int j = 0; j < s.points.length - 1; j++) {
         canvas.drawLine(s.points[j], s.points[j + 1], paint);

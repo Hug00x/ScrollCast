@@ -280,7 +280,7 @@ class _CanvasPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..strokeWidth = s.width
-        ..color = Color(s.color).withOpacity(s.mode == StrokeMode.highlighter ? 0.35 : 1.0);
+  ..color = Color(s.color).withAlpha(((s.mode == StrokeMode.highlighter ? 0.35 : 1.0) * 255).round());
       for (int i = 0; i < s.points.length - 1; i++) {
         canvas.drawLine(s.points[i], s.points[i + 1], p);
       }

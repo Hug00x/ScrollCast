@@ -139,7 +139,7 @@ class _FavoriteScreenState extends State<FavoriteScreen> {
                 prefixIcon: const Icon(Icons.search),
                 isDense: true,
                 filled: true,
-                fillColor: cs.surface.withOpacity(.65),
+                fillColor: cs.surface.withAlpha((.65 * 255).round()),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),
                   borderSide: const BorderSide(color: Colors.transparent),

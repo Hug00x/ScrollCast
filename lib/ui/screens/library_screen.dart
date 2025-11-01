@@ -195,7 +195,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     final cs = Theme.of(context).colorScheme;
 
     // cor visível para ícone não-favorito (claro e escuro)
-    final Color _unfavColor = cs.onSurfaceVariant.withOpacity(0.55);
+    final Color unfavColor = cs.onSurfaceVariant.withAlpha((0.55 * 255).round());
 
     return Scaffold(
       appBar: AppBar(
@@ -212,7 +212,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 prefixIcon: const Icon(Icons.search),
                 isDense: true,
                 filled: true,
-                fillColor: cs.surface.withOpacity(.65),
+                fillColor: cs.surface.withAlpha((.65 * 255).round()),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(14),
                   borderSide: const BorderSide(color: Colors.transparent),
@@ -232,7 +232,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ? const Center(child: Text('Sem PDFs. Importa um PDF para começar.'))
               : ListView.separated(
                   itemCount: _items.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
+                        separatorBuilder: (context, index) => const Divider(height: 1),
                   itemBuilder: (_, i) {
                     final d = _items[i];
                     final isFav = _favIds.contains(d.id);
@@ -246,7 +246,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                 blendMode: BlendMode.srcIn,
                                 child: const Icon(Icons.star, size: 24),
                               )
-                            : Icon(Icons.star_border, size: 24, color: _unfavColor),
+                            : Icon(Icons.star_border, size: 24, color: unfavColor),
                       ),
                       title: ShaderMask(
                         shaderCallback: _titleGradient,

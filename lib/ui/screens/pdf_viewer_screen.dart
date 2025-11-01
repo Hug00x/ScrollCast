@@ -172,19 +172,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     await _savePage();
   }
 
-  Future<void> _exportPdf() async {
-    final all = await ServiceLocator.instance.db.getAllAnnotations(widget.args.pdfId);
-    final dir = await ServiceLocator.instance.storage.exportedPdfDir();
-    final out = await ServiceLocator.instance.storage.createUniqueFilePath(dir, extension: 'pdf');
-    await ServiceLocator.instance.pdf.exportFlattened(
-      originalPath: widget.args.path,
-      annotationsByPage: all,
-      outPath: out,
-    );
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Exportado para: $out')));
-  }
-
   Offset _contentCenter(BuildContext context) {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return const Offset(0, 0);
@@ -194,7 +181,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     return MatrixUtils.transformPoint(inv, center);
   }
 
-  Future<void> _createTextNote(BuildContext context) async {
+  Future<void> _createTextNote() async {
     final controller = TextEditingController();
     final text = await showDialog<String>(
       context: context,
@@ -215,16 +202,15 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
         ],
       ),
     );
-  if (text == null || text.isEmpty) return;
-  // guard against using the BuildContext after async gaps
-  if (!mounted) return;
+    if (text == null || text.isEmpty) return;
+    if (!mounted) return;
 
-  final center = _contentCenter(context);
+    final center = _contentCenter(context);
     setState(() => _textNotes.add(TextNote(position: center, text: text)));
     await _savePage();
   }
 
-  Future<void> _importImage(BuildContext ctx) async {
+  Future<void> _importImage() async {
     final picker = ImagePicker();
     final x = await picker.pickImage(source: ImageSource.gallery);
     if (x == null) return;
@@ -243,7 +229,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     await storage.copyFile(src, dest);
 
     if (!mounted) return;
-    final center = _contentCenter(ctx);
+    final center = _contentCenter(context);
     final defaultSize = math.min(_imgSize.width, _imgSize.height) * 0.3;
     setState(() => _imageNotes.add(ImageNote(position: center, filePath: dest, width: defaultSize, height: defaultSize)));
     await _savePage();
@@ -294,7 +280,11 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
       appBar: AppBar(
         title: Text('${widget.args.name} (${_pageIndex + 1}/$_pageCount)'),
         actions: [
-          IconButton(onPressed: _exportPdf, icon: const Icon(Icons.save_alt)),
+          IconButton(
+            tooltip: 'Importar imagem',
+            onPressed: _importImage,
+            icon: const Icon(Icons.image_outlined),
+          ),
           IconButton(
             tooltip: 'Repor enquadramento',
             onPressed: () => setState(() => _ivController.value = Matrix4.identity()),
@@ -344,14 +334,10 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
             ),
             IconButton.filledTonal(
               tooltip: 'Nova nota de texto',
-              onPressed: () => _createTextNote(context),
+              onPressed: _createTextNote,
               icon: const Icon(Icons.notes_rounded),
             ),
-            IconButton.filledTonal(
-              tooltip: 'Importar imagem',
-              onPressed: () => _importImage(context),
-              icon: const Icon(Icons.image_outlined),
-            ),
+            // moved 'Importar imagem' to AppBar to avoid overlap with audio FAB on small screens
             const Spacer(),
             IconButton(
               onPressed: canNext ? () => _goTo(_pageIndex + 1) : null,

@@ -171,7 +171,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final Color _unfavColor = cs.onSurfaceVariant.withOpacity(0.55);
+  final Color unfavColor = cs.onSurfaceVariant.withAlpha((0.55 * 255).round());
 
     final chips = <Widget>[
       ChoiceChip(
@@ -210,9 +210,9 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
               Expanded(
                 child: _items.isEmpty
                     ? const Center(child: Text('Sem cadernos. Toca em "Novo caderno".'))
-                    : ListView.separated(
-                        itemCount: _items.length,
-                        separatorBuilder: (_, __) => const Divider(height: 1),
+          : ListView.separated(
+            itemCount: _items.length,
+            separatorBuilder: (context, index) => const Divider(height: 1),
                         itemBuilder: (_, i) {
                           final n = _items[i];
                           final isFav = _favIds.contains(n.id);
@@ -226,7 +226,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                                       blendMode: BlendMode.srcIn,
                                       child: const Icon(Icons.star, size: 24),
                                     )
-                                  : Icon(Icons.star_border, size: 24, color: _unfavColor),
+                                  : Icon(Icons.star_border, size: 24, color: unfavColor),
                             ),
                             title: ShaderMask(
                               shaderCallback: _titleGradient,

@@ -45,7 +45,7 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
 
   static const double _minSize = 24.0;
   // touch target size for handles (larger hitbox)
-  static const double _handleTouchSize = 36.0;
+  static const double _handleTouchSize = 56.0;
   // visible handle size (smaller circle inside the touch area)
   static const double _handleVisualSize = 16.0;
   static const double _rotateHandleDistance = 30.0;
@@ -168,12 +168,12 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
     final maxLeft = math.max(0.0, widget.canvasSize.width - _w - pin);
     final maxTop = math.max(0.0, widget.canvasSize.height - _h - pin);
 
-    // delete button sizing: visual size scales with the smaller image side;
-    // touch area is a bit larger than the visual circle for better accessibility.
-    final double _minDelete = 24.0;
-    final double _maxDelete = 64.0;
-    final double _deleteVisual = (math.min(_w, _h) * 0.18).clamp(_minDelete, _maxDelete);
-    final double _deleteTouch = _deleteVisual + 8.0; // extra hit area
+  // delete button sizing: visual size scales with the smaller image side;
+  // touch area is a bit larger than the visual circle for better accessibility.
+  final double minDelete = 24.0;
+  final double maxDelete = 64.0;
+  final double deleteVisual = (math.min(_w, _h) * 0.18).clamp(minDelete, maxDelete);
+  final double deleteTouch = deleteVisual + 8.0; // extra hit area
 
     return Positioned(
       left: (_pos.dx - _w / 2).clamp(0, maxLeft),
@@ -204,7 +204,7 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                     width: _w,
                     height: _h,
                     fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) => Container(
+                    errorBuilder: (ctx, error, stack) => Container(
                       color: Colors.grey.shade200,
                       child: const Center(child: Icon(Icons.broken_image)),
                     ),
@@ -226,6 +226,7 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                   angle: _rotation,
                   alignment: Alignment.center,
                   child: Stack(
+                    clipBehavior: Clip.none,
                     children: [
                       // border that rotates with the image
                       Positioned.fill(
@@ -244,8 +245,8 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                           right: 6,
                           top: 6,
                           child: SizedBox(
-                            width: _deleteTouch,
-                            height: _deleteTouch,
+                            width: deleteTouch,
+                            height: deleteTouch,
                             child: Center(
                               child: Material(
                                 color: Colors.redAccent,
@@ -254,12 +255,12 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                                   customBorder: const CircleBorder(),
                                   onTap: widget.onDelete,
                                   child: SizedBox(
-                                    width: _deleteVisual,
-                                    height: _deleteVisual,
+                                    width: deleteVisual,
+                                    height: deleteVisual,
                                     child: Center(
                                       child: Icon(
                                         Icons.close,
-                                        size: (_deleteVisual * 0.5).clamp(12.0, 28.0),
+                                        size: (deleteVisual * 0.5).clamp(12.0, 28.0),
                                         color: Colors.white,
                                       ),
                                     ),
@@ -293,38 +294,39 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                         bottom: -_handleTouchSize / 2,
                         child: _buildHandle(Alignment.bottomLeft),
                       ),
+                      // rotate handle (above top-center) placed inside the rotated area so it follows rotation
+                      Positioned(
+                        left: (_w / 2) - (_handleTouchSize / 2),
+                        // place the rotate handle so its full visual circle is visible
+                        top: -(_handleTouchSize / 2) - 4,
+                        child: GestureDetector(
+                          onPanStart: _onRotateStart,
+                          onPanUpdate: _onRotateUpdate,
+                          onPanEnd: _onRotateEnd,
+                          child: SizedBox(
+                            width: _handleTouchSize,
+                            height: _handleTouchSize,
+                            child: Center(
+                              child: Container(
+                                width: _handleVisualSize,
+                                height: _handleVisualSize,
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.surface,
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: Theme.of(context).colorScheme.primary, width: 1.2),
+                                ),
+                                child: const Icon(Icons.rotate_right, size: 12),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
 
-            // rotate handle (above top-center)
-            if (_selected)
-              Positioned(
-                left: (_w / 2) - (_handleTouchSize / 2),
-                top: 0,
-                child: GestureDetector(
-                  onPanStart: _onRotateStart,
-                  onPanUpdate: _onRotateUpdate,
-                  onPanEnd: _onRotateEnd,
-                  child: SizedBox(
-                    width: _handleTouchSize,
-                    height: _handleTouchSize,
-                    child: Center(
-                      child: Container(
-                        width: _handleVisualSize,
-                        height: _handleVisualSize,
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surface,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Theme.of(context).colorScheme.primary, width: 1.2),
-                        ),
-                        child: const Icon(Icons.rotate_right, size: 12),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
+            // rotate handle removed from outer layer — it's now inside the rotated stack so it follows rotation
 
             // (old non-rotating delete FAB removed — delete is now inside the rotated area)
           ],

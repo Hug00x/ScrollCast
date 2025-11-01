@@ -147,7 +147,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final code = e.code;
       if (!acc.isGoogle &&
           (code == 'wrong-password' || code == 'invalid-credential' || code == 'user-not-found')) {
-        await _showErrorDialog('Password incorreta (ou credenciais inválidas).', title: 'Autenticação falhou');
+        await _showErrorDialog('Password incorreta.', title: 'Autenticação falhou');
         return; // ← mantém-se na ProfileScreen
       } else {
         _snack('Falha ao trocar para ${acc.email ?? acc.displayName}: ${e.message ?? e.code}');
@@ -614,7 +614,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 onTap: () => Navigator.pop(bctx, a),
                               );
                             },
-                            separatorBuilder: (_, __) => const Divider(height: 1),
+                            separatorBuilder: (context, index) => const Divider(height: 1),
                             itemCount: others.length,
                           ),
                         );
@@ -641,7 +641,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ListTile(
               leading: const Icon(Icons.delete_sweep_rounded),
               title: const Text('Apagar dados'),
-              subtitle: const Text('Isto é definitivo. Vai pedir confirmação.'),
+              subtitle: const Text('Isto é definitivo.'),
               textColor: Theme.of(context).colorScheme.error,
               iconColor: Theme.of(context).colorScheme.error,
               onTap: () async {
@@ -655,7 +655,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ListTile(
               leading: const Icon(Icons.delete_forever_rounded),
               title: const Text('Apagar conta'),
-              subtitle: const Text('Isto é definitivo. Vai pedir confirmação.'),
+              subtitle: const Text('Isto é definitivo.'),
               textColor: Theme.of(context).colorScheme.error,
               iconColor: Theme.of(context).colorScheme.error,
               onTap: _deleteCurrentAccount,
@@ -710,7 +710,7 @@ class _AccountAvatar extends StatelessWidget {
           : null;
       return CircleAvatar(
         radius: 18,
-        backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(.2),
+  backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
         foregroundImage: provider,
         child: provider == null ? Text(_initials(a.displayName ?? a.email ?? '')) : null,
       );
@@ -722,7 +722,7 @@ class _AccountAvatar extends StatelessWidget {
         : null;
     return CircleAvatar(
       radius: 18,
-      backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(.2),
+  backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
       foregroundImage: provider,
       child: provider == null ? Text(_initials(a.displayName ?? a.email ?? '')) : null,
     );
@@ -759,7 +759,7 @@ class _ProfileAvatar extends StatelessWidget {
           final provider = (url != null && url.isNotEmpty) ? NetworkImage(url) : null;
           return CircleAvatar(
             radius: 44,
-            backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(.2),
+            backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
             foregroundImage: provider,
             child: provider == null ? Text(_initials(user.displayName ?? user.email ?? '')) : null,
           );
@@ -775,7 +775,7 @@ class _ProfileAvatar extends StatelessWidget {
             : null;
         return CircleAvatar(
           radius: 44,
-          backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(.2),
+          backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
           foregroundImage: provider,
           child: provider == null ? Text(_initials(user.displayName ?? user.email ?? '')) : null,
         );
@@ -877,7 +877,7 @@ class _HelpSection extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Container(
       decoration: BoxDecoration(
-        color: cs.surfaceVariant.withOpacity(0.35),
+  color: cs.surfaceContainerHighest.withAlpha((0.35 * 255).round()),
         borderRadius: BorderRadius.circular(12),
       ),
       child: ExpansionTile(

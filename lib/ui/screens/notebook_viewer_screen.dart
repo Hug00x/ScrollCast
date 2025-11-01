@@ -166,7 +166,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   }
 
   // notas
-  Future<void> _createTextNote(BuildContext context) async {
+  Future<void> _createTextNote() async {
     final controller = TextEditingController();
     final text = await showDialog<String>(
       context: context,
@@ -188,7 +188,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       ),
     );
   if (text == null || text.isEmpty) return;
-  // the dialog awaits; guard against using the BuildContext if the widget was disposed
+  // the dialog awaits; guard against using the State.context if the widget was disposed
   if (!mounted) return;
 
   final center = _contentCenter(context);
@@ -226,7 +226,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
   }
 
-  Future<void> _importImage(BuildContext ctx) async {
+  Future<void> _importImage() async {
     final picker = ImagePicker();
     final x = await picker.pickImage(source: ImageSource.gallery);
     if (x == null) return;
@@ -244,8 +244,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     final dest = await storage.createUniqueFilePath(imagesDir, extension: ext.isEmpty ? 'jpg' : ext);
     await storage.copyFile(src, dest);
 
-  if (!mounted) return;
-  final center = _contentCenter(context);
+    if (!mounted) return;
+    final center = _contentCenter(context);
     final defaultSize = math.min(_paperSize.width, _paperSize.height) * 0.3;
     setState(() => _imageNotes.add(ImageNote(position: center, filePath: dest, width: defaultSize, height: defaultSize)));
     await _savePage();
@@ -281,6 +281,11 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       appBar: AppBar(
         title: Text('${widget.args.name} (${_pageIndex + 1}/$_pageCount)'),
         actions: [
+          IconButton(
+            tooltip: 'Importar imagem',
+            onPressed: _importImage,
+            icon: const Icon(Icons.image_outlined),
+          ),
           IconButton(
             tooltip: 'Repor enquadramento',
             onPressed: () => setState(() => _ivController.value = Matrix4.identity()),
@@ -330,14 +335,10 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
             ),
             IconButton.filledTonal(
               tooltip: 'Nova nota de texto',
-              onPressed: () => _createTextNote(context),
+              onPressed: _createTextNote,
               icon: const Icon(Icons.notes_rounded),
             ),
-            IconButton.filledTonal(
-              tooltip: 'Importar imagem',
-              onPressed: () => _importImage(context),
-              icon: const Icon(Icons.image_outlined),
-            ),
+            // moved 'Importar imagem' to AppBar to avoid overlap with audio FAB on small screens
             const Spacer(),
             IconButton(
               tooltip: 'Remover página',

@@ -107,7 +107,7 @@ class _WhatsAppMicButtonState extends State<WhatsAppMicButton> {
         decoration: BoxDecoration(
           color: _recording ? Colors.redAccent : Theme.of(context).colorScheme.primary,
           shape: BoxShape.circle,
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.25), blurRadius: 8)],
+          boxShadow: [BoxShadow(color: Colors.black.withAlpha((0.25 * 255).round()), blurRadius: 8)],
         ),
         child: Icon(_recording ? Icons.stop : Icons.mic, color: Colors.white),
       ),
