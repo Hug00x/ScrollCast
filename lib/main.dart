@@ -74,7 +74,7 @@ class PdfNotesApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: ServiceLocator.instance.theme,
-      builder: (_, mode, __) {
+  builder: (_, mode, child) {
         return MaterialApp(
           title: 'ScrollCast',
           theme: buildLightAppTheme(),   // claro
@@ -106,7 +106,7 @@ class PdfNotesApp extends StatelessWidget {
 }
 
 class _RootDecider extends StatelessWidget {
-  const _RootDecider({super.key});
+  const _RootDecider();
   @override
   Widget build(BuildContext context) {
     final auth = ServiceLocator.instance.auth;

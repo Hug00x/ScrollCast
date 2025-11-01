@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../../main.dart';
 import 'library_screen.dart';
 import 'favorites_screen.dart';
 import 'notebooks_screen.dart';
@@ -14,7 +13,13 @@ class HomeShell extends StatefulWidget {
 }
 
 class _HomeShellState extends State<HomeShell> {
-  late int _index = widget.initialIndex;
+  late int _index;
+
+  @override
+  void initState() {
+    super.initState();
+    _index = widget.initialIndex;
+  }
 
   final _pages = const <Widget>[
     FavoriteScreen(),
@@ -32,7 +37,8 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
         onDestinationSelected: (i) => setState(() => _index = i),
-        indicatorColor: cs.primary.withOpacity(.15),
+        // avoid deprecated withOpacity; use withAlpha for equivalent translucent indicator
+        indicatorColor: cs.primary.withAlpha((0.15 * 255).round()),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.star_border_rounded), selectedIcon: Icon(Icons.star_rounded), label: 'Favoritos'),
           NavigationDestination(icon: Icon(Icons.folder_copy_outlined), selectedIcon: Icon(Icons.folder_copy), label: 'PDFs'),

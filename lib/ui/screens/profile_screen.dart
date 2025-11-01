@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/painting.dart';
+// 'painting' not needed: material.dart already exports what's used here
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hive/hive.dart';
 import 'package:image_picker/image_picker.dart';
@@ -294,7 +294,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         PaintingBinding.instance.imageCache.evict(FileImage(File(f.path)));
         PaintingBinding.instance.imageCache.clearLiveImages();
       } catch (_) {}
-      await f.delete().catchError((_) {});
+      try {
+        await f.delete();
+      } catch (_) {}
     }
   }
 
@@ -306,7 +308,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return showDialog<String>(
       context: ctx,
       builder: (dctx) {
-        bool _obscure = true;
+        bool obscure = true;
         return StatefulBuilder(
           builder: (_, setSt) => AlertDialog(
             title: Text(title),
@@ -321,14 +323,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 TextField(
                   controller: c,
                   autofocus: true,
-                  obscureText: _obscure,
+                  obscureText: obscure,
                   decoration: InputDecoration(
                     labelText: 'Password',
                     border: const OutlineInputBorder(),
                     suffixIcon: IconButton(
-                      tooltip: _obscure ? 'Mostrar' : 'Ocultar',
-                      icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
-                      onPressed: () => setSt(() => _obscure = !_obscure),
+                      tooltip: obscure ? 'Mostrar' : 'Ocultar',
+                      icon: Icon(obscure ? Icons.visibility : Icons.visibility_off),
+                      onPressed: () => setSt(() => obscure = !obscure),
                     ),
                   ),
                   onSubmitted: (_) => Navigator.pop(dctx, c.text),
@@ -347,7 +349,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<bool?> _confirmDelete(BuildContext ctx) async {
     final t = TextEditingController();
-    bool _matches(String s) => s.trim().toLowerCase() == 'confirmar';
+  bool matches(String s) => s.trim().toLowerCase() == 'confirmar';
 
     return showDialog<bool>(
       context: ctx,
@@ -368,7 +370,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 onChanged: (_) => setSt(() {}),
                 onSubmitted: (_) {
-                  if (_matches(t.text)) Navigator.pop(dctx, true);
+                  if (matches(t.text)) Navigator.pop(dctx, true);
                 },
               ),
             ],
@@ -376,7 +378,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           actions: [
             TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancelar')),
             FilledButton(
-              onPressed: _matches(t.text) ? () => Navigator.pop(dctx, true) : null,
+              onPressed: matches(t.text) ? () => Navigator.pop(dctx, true) : null,
               child: const Text('Apagar'),
             ),
           ],
@@ -387,7 +389,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<bool?> _confirmClearData(BuildContext ctx) async {
     final t = TextEditingController();
-    bool _matches(String s) => s.trim().toLowerCase() == 'confirmar';
+  bool matches(String s) => s.trim().toLowerCase() == 'confirmar';
 
     return showDialog<bool>(
       context: ctx,
@@ -408,7 +410,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 ),
                 onChanged: (_) => setSt(() {}),
                 onSubmitted: (_) {
-                  if (_matches(t.text)) Navigator.pop(dctx, true);
+                  if (matches(t.text)) Navigator.pop(dctx, true);
                 },
               ),
             ],
@@ -416,7 +418,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           actions: [
             TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text('Cancelar')),
             FilledButton(
-              onPressed: _matches(t.text) ? () => Navigator.pop(dctx, true) : null,
+              onPressed: matches(t.text) ? () => Navigator.pop(dctx, true) : null,
               child: const Text('Apagar'),
             ),
           ],
@@ -447,8 +449,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           minChildSize: 0.5,
           maxChildSize: 0.95,
           builder: (_, controller) {
-            final textStyle = Theme.of(context).textTheme.bodyMedium!;
-            final titleStyle = Theme.of(context).textTheme.titleMedium!;
+            // local styles unused — rely on direct Theme lookups in widgets below
             return Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: ListView(
@@ -533,10 +534,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final theme = ServiceLocator.instance.theme;
     final isLight = theme.value == ThemeMode.light;
 
-    final current = FirebaseAuth.instance.currentUser;
+  final User? current = FirebaseAuth.instance.currentUser;
     final currentUid = current?.uid;
     final isGoogle = current?.providerData.any((p) => p.providerId == 'google.com') ?? false;
-    final isGuest = (current == null) || (current.isAnonymous ?? false);
+    bool isGuest;
+    if (current == null) {
+      isGuest = true;
+    } else {
+      // assign directly; on some SDKs this is non-nullable
+      isGuest = current.isAnonymous;
+    }
 
     final others = _accounts.where((a) => a.uid != currentUid).toList();
 

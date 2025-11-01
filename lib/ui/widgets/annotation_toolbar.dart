@@ -53,7 +53,16 @@ class AnnotationToolbar extends StatelessWidget {
         ],
       ),
     );
-    if (picked != null) onColorChanged(picked.value);
+    if (picked != null) {
+      // Color component accessors like `alpha`, `red`, `green`, `blue` are deprecated;
+      // use the normalized `.a/.r/.g/.b` doubles and convert to 0..255 ints.
+      final int a = ((picked.a * 255.0).round() & 0xff);
+      final int r = ((picked.r * 255.0).round() & 0xff);
+      final int g = ((picked.g * 255.0).round() & 0xff);
+      final int b = ((picked.b * 255.0).round() & 0xff);
+      final int argb = (a << 24) | (r << 16) | (g << 8) | b;
+      onColorChanged(argb);
+    }
   }
 
   @override
@@ -66,7 +75,8 @@ class AnnotationToolbar extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: scheme.surface.withOpacity(0.6),
+          // avoid deprecated `withOpacity` on Color; use withAlpha for equivalent effect
+          color: scheme.surface.withAlpha((0.6 * 255).round()),
           borderRadius: BorderRadius.circular(14),
         ),
         child: Column(
@@ -123,8 +133,8 @@ class AnnotationToolbar extends StatelessWidget {
               children: [
                 const Icon(Icons.horizontal_rule_rounded, size: 18),
                 Expanded(
-                  child: Slider(
-                    value: (isEraser ? eraserWidth : width).clamp(1, 48),
+                    child: Slider(
+                    value: (isEraser ? eraserWidth : width).clamp(1, 48).toDouble(),
                     min: 1,
                     max: 48,
                     onChanged: isEraser ? onEraserWidthChanged : onWidthChanged,
@@ -162,7 +172,7 @@ class _ModeButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? scheme.primary.withOpacity(0.15) : Colors.transparent,
+          color: selected ? scheme.primary.withAlpha((0.15 * 255).round()) : Colors.transparent,
           border: Border.all(color: selected ? scheme.primary : scheme.outlineVariant),
           borderRadius: BorderRadius.circular(12),
         ),
@@ -230,12 +240,13 @@ class _ColorPaletteWithPicker extends StatelessWidget {
                 child: Container(
                   width: 32,
                   height: 32,
-                  decoration: BoxDecoration(
+                    decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: RadialGradient(
-                      colors: [Color(selected), Color(selected).withOpacity(.7)],
+                      // avoid Color.value and withOpacity deprecations
+                      colors: [Color(selected), Color(selected).withAlpha((0.7 * 255).round())],
                     ),
-                    border: Border.all(color: scheme.onSurface.withOpacity(.15)),
+                    border: Border.all(color: scheme.onSurface.withAlpha((0.15 * 255).round())),
                   ),
                   child: const Icon(Icons.palette_rounded, size: 18),
                 ),
@@ -261,54 +272,12 @@ class _ColorPaletteWithPicker extends StatelessWidget {
             ),
           );
         },
-        separatorBuilder: (_, __) => const SizedBox(width: 10),
+  separatorBuilder: (_, _) => const SizedBox(width: 10),
         itemCount: _colors.length + 1, // +1 para o botão de espectro
       ),
     );
   }
 }
 
-class _StrokePreview extends StatelessWidget {
-  const _StrokePreview({required this.color, required this.width});
-  final int color;
-  final double width;
-
-  @override
-  Widget build(BuildContext context) {
-    final double w = width.clamp(1, 48).toDouble();
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        const SizedBox(width: 8),
-        SizedBox(
-          width: 48,
-          height: 20,
-          child: CustomPaint(
-            painter: _StrokeDemoPainter(Color(color), w),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _StrokeDemoPainter extends CustomPainter {
-  _StrokeDemoPainter(this.color, this.width);
-  final Color color;
-  final double width;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final p = Paint()
-      ..color = color
-      ..strokeCap = StrokeCap.round
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = width;
-    final y = size.height / 2;
-    canvas.drawLine(Offset(2, y), Offset(size.width - 2, y), p);
-  }
-
-  @override
-  bool shouldRepaint(covariant _StrokeDemoPainter oldDelegate) =>
-      oldDelegate.color != color || oldDelegate.width != width;
-}
+// Note: preview painter removed because it wasn't referenced anywhere in the toolbar.
+// Keeping the file focused on the toolbar UI reduces unused-element analyzer hints.

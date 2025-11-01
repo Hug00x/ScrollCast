@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show MatrixUtils;
 
@@ -178,10 +177,12 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
         ],
       ),
     );
-    if (text == null || text.isEmpty) return;
+  if (text == null || text.isEmpty) return;
+  // the dialog awaits; guard against using the BuildContext if the widget was disposed
+  if (!mounted) return;
 
-    final center = _contentCenter(context);
-    setState(() => _textNotes.add(TextNote(position: center, text: text)));
+  final center = _contentCenter(context);
+  setState(() => _textNotes.add(TextNote(position: center, text: text)));
     await _savePage();
   }
 
