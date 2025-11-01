@@ -552,7 +552,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Center(child: _ProfileAvatar(accountsBox: _box)),
+          Center(child: _ProfileAvatar(accountsBox: _box, onTap: (!isGoogle && !isGuest) ? () => _changeAvatar() : null)),
           const SizedBox(height: 16),
           Center(child: Text('Sessão ativa', style: Theme.of(context).textTheme.labelMedium)),
           const SizedBox(height: 24),
@@ -742,7 +742,8 @@ class _AccountAvatar extends StatelessWidget {
 
 class _ProfileAvatar extends StatelessWidget {
   final Box? accountsBox;
-  const _ProfileAvatar({required this.accountsBox});
+  final VoidCallback? onTap;
+  const _ProfileAvatar({required this.accountsBox, this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -757,12 +758,14 @@ class _ProfileAvatar extends StatelessWidget {
         if (isGoogle) {
           final url = user.photoURL;
           final provider = (url != null && url.isNotEmpty) ? NetworkImage(url) : null;
-          return CircleAvatar(
+          final avatar = CircleAvatar(
             radius: 44,
             backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
             foregroundImage: provider,
             child: provider == null ? Text(_initials(user.displayName ?? user.email ?? '')) : null,
           );
+          // Google avatars are not editable here
+          return avatar;
         }
 
         String? path;
@@ -773,12 +776,17 @@ class _ProfileAvatar extends StatelessWidget {
         final provider = (path != null && File(path).existsSync())
             ? FileImage(File(path))
             : null;
-        return CircleAvatar(
+        final avatar = CircleAvatar(
           radius: 44,
           backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
           foregroundImage: provider,
           child: provider == null ? Text(_initials(user.displayName ?? user.email ?? '')) : null,
         );
+        // If an onTap callback is provided (email/password accounts), make the avatar tappable
+        if (onTap != null) {
+          return GestureDetector(onTap: onTap, child: avatar);
+        }
+        return avatar;
       },
     );
   }
