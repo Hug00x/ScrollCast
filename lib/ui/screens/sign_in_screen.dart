@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../main.dart';
+import '../auth_error_messages.dart';
 import 'home_shell.dart';
 
 class SignInScreen extends StatefulWidget {
@@ -68,7 +69,7 @@ class _SignInScreenState extends State<SignInScreen> {
       _goHomeIfLogged(); // ⬅️ navega já
     } catch (e) {
       if (ServiceLocator.instance.auth.currentUid == null) {
-        setState(() => _error = '$e');
+        setState(() => _error = friendlyAuthMessage(e));
       } else {
         _goHomeIfLogged();
       }
@@ -85,7 +86,7 @@ class _SignInScreenState extends State<SignInScreen> {
       _goHomeIfLogged(); // ⬅️ navega já
     } catch (e) {
       if (ServiceLocator.instance.auth.currentUid == null) {
-        setState(() => _error = '$e');
+        setState(() => _error = friendlyAuthMessage(e));
       } else {
         _goHomeIfLogged();
       }

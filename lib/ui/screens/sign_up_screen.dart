@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 import '../../main.dart';
+import '../auth_error_messages.dart';
 import 'home_shell.dart';
 
 class SignUpScreen extends StatefulWidget {
@@ -68,7 +69,7 @@ class _SignUpScreenState extends State<SignUpScreen> {
       _goHomeIfLogged(); // ⬅️ navega logo
     } catch (e) {
       if (ServiceLocator.instance.auth.currentUid == null) {
-        setState(() => _error = '$e');
+        setState(() => _error = friendlyAuthMessage(e, forSignUp: true));
       } else {
         _goHomeIfLogged();
       }
