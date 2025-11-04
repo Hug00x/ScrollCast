@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 
@@ -73,7 +74,42 @@ class AuthServiceFirebase implements AuthService {
         idToken: gAuth.idToken,
       );
 
-      await _auth.signInWithCredential(cred).timeout(_opTimeout);
+      // Defensive pre-check: fetch existing sign-in methods for this email
+      // to avoid surprising cases where Firebase might create a new user.
+      try {
+  final email = account.email;
+  if (email.isNotEmpty) {
+          try {
+            final methods = await _auth.fetchSignInMethodsForEmail(email).timeout(_opTimeout);
+            // Debug log to help diagnose duplication issues during testing.
+            // You can remove these prints in production.
+            developer.log('signInWithGoogle: fetched sign-in methods for $email -> $methods', name: 'auth');
+
+            if (methods.contains('password')) {
+              // There's an existing email/password account — let the caller
+              // handle linking instead of letting Firebase create a separate
+              // account.
+              throw AccountExistsWithDifferentCredential(email, cred);
+            }
+          } catch (e) {
+            // Ignore errors fetching methods — we'll still try sign-in and
+            // rely on Firebase to report account-exists-with-different-credential
+            // if needed.
+            developer.log('signInWithGoogle: warning while fetching methods for $email: $e', name: 'auth', level: 900);
+          }
+        }
+
+        await _auth.signInWithCredential(cred).timeout(_opTimeout);
+      } on FirebaseAuthException catch (e) {
+        // If the email already exists with a different credential (e.g. the
+        // user previously signed up with email/password), surface a specific
+        // exception so the UI can offer to link the accounts.
+        if (e.code == 'account-exists-with-different-credential') {
+          // account.email should be available from the Google account
+          throw AccountExistsWithDifferentCredential(account.email, cred);
+        }
+        rethrow;
+      }
     } on TimeoutException {
       if (_auth.currentUser != null) return;
       rethrow;

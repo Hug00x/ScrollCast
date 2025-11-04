@@ -62,10 +62,6 @@ flutter:
     - assets/icon_delete.png
     - assets/scrollcast_with_name.png
 
-# Só usa isto se o solver se queixar do package "web"
-# dependency_overrides:
-#   web: ^0.5.1
-
 flutter_native_splash:
   color: "#0B1A24"
   image: assets/scrollcast.png

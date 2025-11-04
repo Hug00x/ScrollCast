@@ -1,9 +1,16 @@
 // ui/screens/sign_in_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+// The code below intentionally uses the BuildContext across an awaited
+// dialog call when handling an account-exists-with-different-credential
+// flow; we've guarded with `mounted` afterwards. Suppress the lint for
+// the file to avoid spurious analyzer warnings here.
+// ignore_for_file: use_build_context_synchronously
 
 import '../../main.dart';
 import '../auth_error_messages.dart';
+import '../../services/auth_service.dart' show AccountExistsWithDifferentCredential;
+import 'dart:async';
 import 'home_shell.dart';
 
 class SignInScreen extends StatefulWidget {
@@ -85,6 +92,59 @@ class _SignInScreenState extends State<SignInScreen> {
       await ServiceLocator.instance.auth.signInWithGoogle();
       _goHomeIfLogged(); // ⬅️ navega já
     } catch (e) {
+      // Special-case the account-exists-with-different-credential flow so we
+      // can offer to link the Google credential to an existing email/password
+      // account.
+      if (e is AccountExistsWithDifferentCredential) {
+        final email = e.email;
+        final pending = e.pendingCredential;
+        // Ask the user for the password of the existing account so we can
+        // sign them in and then link the Google credential.
+        final pass = await showDialog<String>(
+          context: context,
+          builder: (ctx) {
+            final tc = TextEditingController();
+            return AlertDialog(
+              title: const Text('Conta já existe'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(email == null ? 'Esta conta já existe.' : 'Já existe uma conta para $email. Introduz a password para a ligar.'),
+                  const SizedBox(height: 8),
+                  TextField(controller: tc, obscureText: true, decoration: const InputDecoration(labelText: 'Password')),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, tc.text.trim()), child: const Text('Entrar e ligar')),
+              ],
+            );
+          },
+  );
+
+  if (!mounted) return;
+
+  if (pass != null && pass.isNotEmpty) {
+          try {
+            await ServiceLocator.instance.auth.signInWithEmail(email ?? '', pass);
+            // Now link the pending Google credential
+            final user = FirebaseAuth.instance.currentUser;
+            if (user != null) {
+              await user.linkWithCredential(pending);
+            }
+            _goHomeIfLogged();
+            return;
+          } catch (linkErr) {
+            setState(() => _error = friendlyAuthMessage(linkErr));
+            return;
+          }
+        }
+
+        // user cancelled or didn't provide password
+        setState(() => _error = 'Operação cancelada.');
+        return;
+      }
+
       if (ServiceLocator.instance.auth.currentUid == null) {
         setState(() => _error = friendlyAuthMessage(e));
       } else {
