@@ -39,11 +39,20 @@ class Stroke {
 class TextNote {
   final Offset position;
   final String text;
+  final String? label;
 
-  const TextNote({required this.position, required this.text});
+  const TextNote({required this.position, required this.text, this.label});
+
+  TextNote copyWith({Offset? position, String? text, String? label}) {
+    return TextNote(
+      position: position ?? this.position,
+      text: text ?? this.text,
+      label: label ?? this.label,
+    );
+  }
 
   Map<String, dynamic> toMap() =>
-      {'x': position.dx, 'y': position.dy, 'text': text};
+      {'x': position.dx, 'y': position.dy, 'text': text, 'label': label};
 
   factory TextNote.fromMap(Map<String, dynamic> map) => TextNote(
         position: Offset(
@@ -51,6 +60,7 @@ class TextNote {
           (map['y'] as num).toDouble(),
         ),
         text: map['text'] as String,
+        label: (map['label'] as String?)?.isEmpty ?? true ? null : (map['label'] as String?),
       );
 }
 
@@ -58,22 +68,26 @@ class AudioNote {
   final Offset position;
   final String filePath;
   final int durationMs;
+  final String? label;
 
   const AudioNote({
     required this.position,
     required this.filePath,
     required this.durationMs,
+    this.label,
   });
 
   AudioNote copyWith({
     Offset? position,
     String? filePath,
     int? durationMs,
+    String? label,
   }) {
     return AudioNote(
       position: position ?? this.position,
       filePath: filePath ?? this.filePath,
       durationMs: durationMs ?? this.durationMs,
+      label: label ?? this.label,
     );
   }
 
@@ -82,6 +96,7 @@ class AudioNote {
         'y': position.dy,
         'filePath': filePath,
         'durationMs': durationMs,
+    'label': label,
       };
 
   /// Aceita chaves antigas ('file', 'dur') para compatibilidade.
@@ -92,6 +107,7 @@ class AudioNote {
         ),
         filePath: (map['filePath'] ?? map['file']) as String,
         durationMs: (map['durationMs'] ?? map['dur']) as int,
+        label: (map['label'] as String?)?.isEmpty ?? true ? null : (map['label'] as String?),
       );
 }
 

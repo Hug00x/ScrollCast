@@ -7,6 +7,7 @@ class NotebookModel {
   final int pageCount;
   final DateTime lastOpened;
   final int lastPage;
+  final List<int> recentColors;
 
   const NotebookModel({
     required this.id,
@@ -15,6 +16,7 @@ class NotebookModel {
     required this.lastOpened,
     this.folder,
     this.lastPage = 0,
+    this.recentColors = const [],
   });
 
   NotebookModel copyWith({
@@ -24,6 +26,7 @@ class NotebookModel {
     int? pageCount,
     DateTime? lastOpened,
     int? lastPage,
+    List<int>? lastColors,
   }) {
     return NotebookModel(
       id: id ?? this.id,
@@ -32,6 +35,7 @@ class NotebookModel {
       pageCount: pageCount ?? this.pageCount,
       lastOpened: lastOpened ?? this.lastOpened,
       lastPage: lastPage ?? this.lastPage,
+      recentColors: lastColors ?? this.recentColors,
     );
   }
 
@@ -42,6 +46,7 @@ class NotebookModel {
     'pageCount': pageCount,
     'lastOpened': lastOpened.millisecondsSinceEpoch,
     'lastPage': lastPage,
+    'recentColors': recentColors,
   };
 
   factory NotebookModel.fromMap(Map<String, dynamic> map) => NotebookModel(
@@ -51,6 +56,7 @@ class NotebookModel {
     pageCount: map['pageCount'] as int,
     lastOpened: DateTime.fromMillisecondsSinceEpoch(map['lastOpened'] as int),
     lastPage: (map['lastPage'] as int?) ?? 0,
+    recentColors: (map['recentColors'] as List?)?.map((e) => (e as int)).toList() ?? const [],
   );
 
   String toJson() => json.encode(toMap());

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter/services.dart';
 import '../../models/annotations.dart';
+import '../../main.dart';
 
 // Forces input to uppercase (used for hex input)
 class _UpperCaseTextFormatter extends TextInputFormatter {
@@ -29,6 +30,8 @@ class AnnotationToolbar extends StatelessWidget {
     this.showLabels = true,
     required this.eraserWidth,
     required this.onEraserWidthChanged,
+    this.ownerId,
+    this.ownerIsNotebook = false,
   });
 
   final StrokeMode mode;
@@ -49,6 +52,8 @@ class AnnotationToolbar extends StatelessWidget {
 
   final double eraserWidth;
   final ValueChanged<double> onEraserWidthChanged;
+  final String? ownerId;
+  final bool ownerIsNotebook;
 
   Future<void> _pickColor(BuildContext context) async {
     Color temp = Color(color);
@@ -107,7 +112,7 @@ class AnnotationToolbar extends StatelessWidget {
                       children: [
                         Row(
                           children: [
-                            const Expanded(child: Text('Editar código HEX', style: TextStyle(fontWeight: FontWeight.w600))),
+                            const Expanded(child: Text('Escolher código HEX', style: TextStyle(fontWeight: FontWeight.w600))),
                             IconButton(onPressed: () => Navigator.pop(ctx3), icon: const Icon(Icons.close)),
                           ],
                         ),
@@ -221,6 +226,27 @@ class AnnotationToolbar extends StatelessWidget {
       // convert Color to ARGB int
       final int argb = picked.value & 0xFFFFFFFF;
       onColorChanged(argb);
+      // persist recent color for this document if we have an owner id
+      if (ownerId != null) {
+        try {
+          final db = ServiceLocator.instance.db;
+          if (ownerIsNotebook) {
+            final model = await db.getNotebookById(ownerId!);
+            if (model != null) {
+              final list = <int>[argb, ...model.recentColors.where((c) => c != argb)];
+              final trimmed = list.take(8).toList();
+              await db.upsertNotebook(model.copyWith(lastOpened: model.lastOpened, lastPage: model.lastPage, lastColors: trimmed));
+            }
+          } else {
+            final model = await db.getPdfById(ownerId!);
+            if (model != null) {
+              final list = <int>[argb, ...model.recentColors.where((c) => c != argb)];
+              final trimmed = list.take(8).toList();
+              await db.upsertPdf(model.copyWith(lastOpened: model.lastOpened, lastPage: model.lastPage, recentColors: trimmed));
+            }
+          }
+        } catch (_) {}
+      }
     }
   }
 
@@ -288,8 +314,42 @@ class AnnotationToolbar extends StatelessWidget {
             // LINHA 2 — paleta + botão do espectro JUNTOS
             _ColorPaletteWithPicker(
               selected: color,
-              onChanged: (c) { if (enabled) onColorChanged(c); },
+              onChanged: (c) {
+                if (!enabled) return;
+                onColorChanged(c);
+                // persist recent color for owner
+                if (ownerId != null) {
+                  () async {
+                    try {
+                      final db = ServiceLocator.instance.db;
+                      if (ownerIsNotebook) {
+                        final model = await db.getNotebookById(ownerId!);
+                        if (model != null) {
+                          final list = <int>[c, ...model.recentColors.where((x) => x != c)];
+                          final trimmed = list.take(8).toList();
+                          await db.upsertNotebook(model.copyWith(lastOpened: model.lastOpened, lastPage: model.lastPage, lastColors: trimmed));
+                        }
+                      } else {
+                        final model = await db.getPdfById(ownerId!);
+                        if (model != null) {
+                          final list = <int>[c, ...model.recentColors.where((x) => x != c)];
+                          final trimmed = list.take(8).toList();
+                          await db.upsertPdf(model.copyWith(lastOpened: model.lastOpened, lastPage: model.lastPage, recentColors: trimmed));
+                        }
+                      }
+                    } catch (_) {}
+                  }();
+                }
+              },
               onPickMore: () { if (enabled) _pickColor(context); },
+              onOpenRecent: () {
+                if (!enabled || ownerId == null) return;
+                // open recent colors sheet
+                showModalBottomSheet<void>(
+                  context: context,
+                  builder: (ctx) => _RecentColorsSheet(ownerId: ownerId!, ownerIsNotebook: ownerIsNotebook, onSelect: (col) { if (enabled) onColorChanged(col); }),
+                );
+              },
               enabled: enabled,
             ),
 
@@ -372,12 +432,14 @@ class _ColorPaletteWithPicker extends StatelessWidget {
     required this.selected,
     required this.onChanged,
     required this.onPickMore,
+    required this.onOpenRecent,
     this.enabled = true,
   });
 
   final int selected;
   final ValueChanged<int> onChanged;
   final VoidCallback onPickMore;
+  final VoidCallback onOpenRecent;
   final bool enabled;
 
   // Paleta “ScrollCast”
@@ -389,7 +451,6 @@ class _ColorPaletteWithPicker extends StatelessWidget {
     0xFF00ACC1, // ciano
     0xFF8E24AA, // roxo
     0xFF000000, // preto
-    0xFFFFFFFF, // branco
   ];
 
   @override
@@ -403,7 +464,7 @@ class _ColorPaletteWithPicker extends StatelessWidget {
         physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.only(right: 4),
         itemBuilder: (_, i) {
-          // último “item virtual” é o botão de espectro
+          // virtual items: spectrum button and recent-colors button at the end
           if (i == _colors.length) {
             return Tooltip(
               message: 'Mais cores…',
@@ -416,12 +477,29 @@ class _ColorPaletteWithPicker extends StatelessWidget {
                     decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: RadialGradient(
-                      // avoid Color.value and withOpacity deprecations
                       colors: [Color(selected), Color(selected).withAlpha((0.7 * 255).round())],
                     ),
                     border: Border.all(color: scheme.onSurface.withAlpha((0.15 * 255).round())),
                   ),
                   child: const Icon(Icons.palette_rounded, size: 18),
+                ),
+              ),
+            );
+          }
+          if (i == _colors.length + 1) {
+            return Tooltip(
+              message: 'Cores recentes',
+              child: InkWell(
+                onTap: enabled ? onOpenRecent : null,
+                borderRadius: BorderRadius.circular(16),
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(color: scheme.onSurface.withAlpha((0.15 * 255).round())),
+                  ),
+                  child: const Icon(Icons.history_rounded, size: 18),
                 ),
               ),
             );
@@ -446,7 +524,7 @@ class _ColorPaletteWithPicker extends StatelessWidget {
           );
         },
   separatorBuilder: (_, _) => const SizedBox(width: 10),
-        itemCount: _colors.length + 1, // +1 para o botão de espectro
+        itemCount: _colors.length + 2, // +1 para o botão de espectro +1 para o botão de cores recentes
       ),
     );
   }
@@ -454,3 +532,122 @@ class _ColorPaletteWithPicker extends StatelessWidget {
 
 // Note: preview painter removed because it wasn't referenced anywhere in the toolbar.
 // Keeping the file focused on the toolbar UI reduces unused-element analyzer hints.
+
+class _RecentColorsSheet extends StatefulWidget {
+  const _RecentColorsSheet({required this.ownerId, required this.ownerIsNotebook, required this.onSelect});
+
+  final String ownerId;
+  final bool ownerIsNotebook;
+  final ValueChanged<int> onSelect;
+
+  @override
+  State<_RecentColorsSheet> createState() => _RecentColorsSheetState();
+}
+
+class _RecentColorsSheetState extends State<_RecentColorsSheet> {
+  List<int> _colors = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final db = ServiceLocator.instance.db;
+      if (widget.ownerIsNotebook) {
+        final m = await db.getNotebookById(widget.ownerId);
+        if (m != null) _colors = List.of(m.recentColors);
+      } else {
+        final m = await db.getPdfById(widget.ownerId);
+        if (m != null) _colors = List.of(m.recentColors);
+      }
+    } catch (_) {}
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _clearAll() async {
+    try {
+      final db = ServiceLocator.instance.db;
+      if (widget.ownerIsNotebook) {
+        final m = await db.getNotebookById(widget.ownerId);
+        if (m != null) await db.upsertNotebook(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, lastColors: []));
+      } else {
+        final m = await db.getPdfById(widget.ownerId);
+        if (m != null) await db.upsertPdf(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, recentColors: []));
+      }
+    } catch (_) {}
+    if (mounted) setState(() => _colors = []);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(child: Text('Cores recentes', style: TextStyle(fontWeight: FontWeight.w600))),
+                IconButton(onPressed: _clearAll, icon: const Icon(Icons.delete_outline_rounded)),
+                IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded)),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (_colors.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Text('Sem cores recentes para este documento.', style: TextStyle(color: cs.onSurfaceVariant)),
+              )
+            else
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: _colors.map((c) {
+                  return GestureDetector(
+                    onTap: () async {
+                      // move selected to front and persist
+                      final sel = c;
+                      try {
+                        final db = ServiceLocator.instance.db;
+                        if (widget.ownerIsNotebook) {
+                          final m = await db.getNotebookById(widget.ownerId);
+                          if (m != null) {
+                            final list = <int>[sel, ...m.recentColors.where((x) => x != sel)];
+                            await db.upsertNotebook(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, lastColors: list.take(8).toList()));
+                          }
+                        } else {
+                          final m = await db.getPdfById(widget.ownerId);
+                          if (m != null) {
+                            final list = <int>[sel, ...m.recentColors.where((x) => x != sel)];
+                            await db.upsertPdf(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, recentColors: list.take(8).toList()));
+                          }
+                        }
+                      } catch (_) {}
+                      widget.onSelect(c);
+                      Navigator.pop(context);
+                    },
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Color(c),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: cs.onSurface.withAlpha((0.12 * 255).round())),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+}

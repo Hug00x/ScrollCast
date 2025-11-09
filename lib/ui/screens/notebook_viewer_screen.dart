@@ -183,7 +183,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Remover página'),
-        content: const Text('Tem a certeza de que pretende apagar a página atual? Esta ação não pode ser desfeita.'),
+        content: const Text('Tens a certeza de que queres apagar a página atual? Esta ação não pode ser desfeita.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apagar')),
@@ -507,6 +507,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                   enabled: !_handMode,
                   eraserWidth: _eraserWidth,
                   onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
+                  ownerId: widget.args.notebookId,
+                  ownerIsNotebook: true,
                 ),
               ),
               Expanded(

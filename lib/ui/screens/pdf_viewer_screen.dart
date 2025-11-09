@@ -415,6 +415,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                   enabled: !_handMode,
                   eraserWidth: _eraserWidth,
                   onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
+                  ownerId: widget.args.pdfId,
+                  ownerIsNotebook: false,
                 ),
               ),
               Expanded(

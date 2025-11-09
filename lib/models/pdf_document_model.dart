@@ -8,6 +8,7 @@ class PdfDocumentModel {
   final int pageCount;
   final DateTime lastOpened;
   final int lastPage;
+  final List<int> recentColors;
 
   PdfDocumentModel({
     required this.id,
@@ -17,6 +18,7 @@ class PdfDocumentModel {
     required this.lastOpened,
     this.annotatedPath,
     this.lastPage = 0,
+    this.recentColors = const [],
   });
 
   PdfDocumentModel copyWith({
@@ -27,6 +29,7 @@ class PdfDocumentModel {
     int? pageCount,
     DateTime? lastOpened,
     int? lastPage,
+    List<int>? recentColors,
   }) {
     return PdfDocumentModel(
       id: id ?? this.id,
@@ -36,6 +39,7 @@ class PdfDocumentModel {
       pageCount: pageCount ?? this.pageCount,
       lastOpened: lastOpened ?? this.lastOpened,
       lastPage: lastPage ?? this.lastPage,
+      recentColors: recentColors ?? this.recentColors,
     );
   }
 
@@ -47,6 +51,7 @@ class PdfDocumentModel {
         'pageCount': pageCount,
     'lastOpened': lastOpened.millisecondsSinceEpoch,
     'lastPage': lastPage,
+    'recentColors': recentColors,
       };
 
   factory PdfDocumentModel.fromMap(Map<String, dynamic> map) => PdfDocumentModel(
@@ -57,6 +62,7 @@ class PdfDocumentModel {
         pageCount: map['pageCount'] as int,
     lastOpened: DateTime.fromMillisecondsSinceEpoch(map['lastOpened'] as int),
     lastPage: (map['lastPage'] as int?) ?? 0,
+    recentColors: (map['recentColors'] as List?)?.map((e) => (e as int)).toList() ?? const [],
       );
 
   String toJson() => json.encode(toMap());
