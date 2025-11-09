@@ -1,6 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_colorpicker/flutter_colorpicker.dart';
+import 'package:flutter/services.dart';
 import '../../models/annotations.dart';
+
+// Forces input to uppercase (used for hex input)
+class _UpperCaseTextFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
+    final upper = newValue.text.toUpperCase();
+    return TextEditingValue(text: upper, selection: newValue.selection);
+  }
+}
 
 class AnnotationToolbar extends StatelessWidget {
   const AnnotationToolbar({
@@ -15,6 +25,8 @@ class AnnotationToolbar extends StatelessWidget {
       this.onRedo,
       this.canUndo = false,
       this.canRedo = false,
+    this.enabled = true,
+    this.showLabels = true,
     required this.eraserWidth,
     required this.onEraserWidthChanged,
   });
@@ -32,6 +44,8 @@ class AnnotationToolbar extends StatelessWidget {
   final VoidCallback? onRedo;
   final bool canUndo;
   final bool canRedo;
+  final bool enabled;
+  final bool showLabels;
 
   final double eraserWidth;
   final ValueChanged<double> onEraserWidthChanged;
@@ -40,31 +54,172 @@ class AnnotationToolbar extends StatelessWidget {
     Color temp = Color(color);
     final picked = await showDialog<Color>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Escolher cor'),
-        content: SingleChildScrollView(
-          child: ColorPicker(
-            pickerColor: temp,
-            onColorChanged: (c) => temp = c,
-            enableAlpha: false,
-            portraitOnly: true,
-            pickerAreaBorderRadius: const BorderRadius.all(Radius.circular(12)),
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, temp), child: const Text('OK')),
-        ],
-      ),
+      builder: (ctx) {
+        final controller = TextEditingController();
+        String colorToHex(Color c) {
+          // return RRGGBB
+          final r = (c.red).toRadixString(16).padLeft(2, '0');
+          final g = (c.green).toRadixString(16).padLeft(2, '0');
+          final b = (c.blue).toRadixString(16).padLeft(2, '0');
+          return (r + g + b).toUpperCase();
+        }
+
+  controller.text = colorToHex(temp);
+  controller.selection = TextSelection.fromPosition(TextPosition(offset: controller.text.length));
+
+        return StatefulBuilder(builder: (ctx2, setState) {
+          void setTempFromHex(String text) {
+            final hex = text.replaceAll('#', '').replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
+            if (hex.length >= 6) {
+              final hex6 = hex.substring(0, 6).toUpperCase();
+              try {
+                final int val = int.parse(hex6, radix: 16);
+                final Color c = Color(0xFF000000 | val);
+                setState(() {
+                  temp = c;
+                  // keep controller uppercase and limited to 6
+                  if (controller.text.toUpperCase() != hex6) {
+                    controller.value = TextEditingValue(
+                      text: hex6,
+                      selection: TextSelection.collapsed(offset: hex6.length),
+                    );
+                  }
+                });
+              } catch (_) {}
+            }
+          }
+
+          // When the user wants to edit the hex code we open a bottom sheet
+          // so the keyboard is handled by the sheet and doesn't push the dialog
+          // offscreen. The dialog itself stays fixed.
+          Future<void> openHexEditor() async {
+            final res = await showModalBottomSheet<String>(
+              context: ctx2,
+              isScrollControlled: true,
+              builder: (ctx3) {
+                final editController = TextEditingController(text: controller.text);
+                return Padding(
+                  padding: EdgeInsets.only(bottom: MediaQuery.of(ctx3).viewInsets.bottom),
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(child: Text('Editar código HEX', style: TextStyle(fontWeight: FontWeight.w600))),
+                            IconButton(onPressed: () => Navigator.pop(ctx3), icon: const Icon(Icons.close)),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: editController,
+                          autofocus: true,
+                          textCapitalization: TextCapitalization.characters,
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(RegExp(r'[0-9a-fA-F]')),
+                            LengthLimitingTextInputFormatter(6),
+                            _UpperCaseTextFormatter(),
+                          ],
+                          decoration: const InputDecoration(prefixText: '#', hintText: 'RRGGBB', counterText: ''),
+                          onSubmitted: (v) => Navigator.pop(ctx3, v),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton(
+                                onPressed: () => Navigator.pop(ctx3, editController.text),
+                                child: const Text('OK'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            );
+
+            if (res != null) {
+              setTempFromHex(res);
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('Escolher cor'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  ColorPicker(
+                    pickerColor: temp,
+                    onColorChanged: (c) {
+                      setState(() {
+                        temp = c;
+                        controller.text = colorToHex(c);
+                      });
+                    },
+                    enableAlpha: false,
+                    portraitOnly: true,
+                    showLabel: false, // hide RGB/HSL fields
+                    pickerAreaBorderRadius: const BorderRadius.all(Radius.circular(12)),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: temp,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Theme.of(context).colorScheme.onSurface.withAlpha(0x22)),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: InkWell(
+                          onTap: () => openHexEditor(),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    '#${controller.text}',
+                                    style: const TextStyle(fontFamily: 'monospace'),
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                const Icon(Icons.edit, size: 18),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx2), child: const Text('Cancelar')),
+              FilledButton(onPressed: () => Navigator.pop(ctx2, temp), child: const Text('OK')),
+            ],
+          );
+        });
+      },
     );
     if (picked != null) {
-      // Color component accessors like `alpha`, `red`, `green`, `blue` are deprecated;
-      // use the normalized `.a/.r/.g/.b` doubles and convert to 0..255 ints.
-      final int a = ((picked.a * 255.0).round() & 0xff);
-      final int r = ((picked.r * 255.0).round() & 0xff);
-      final int g = ((picked.g * 255.0).round() & 0xff);
-      final int b = ((picked.b * 255.0).round() & 0xff);
-      final int argb = (a << 24) | (r << 16) | (g << 8) | b;
+      // convert Color to ARGB int
+      final int argb = picked.value & 0xFFFFFFFF;
       onColorChanged(argb);
     }
   }
@@ -76,16 +231,21 @@ class AnnotationToolbar extends StatelessWidget {
 
     return Material(
       color: Colors.transparent,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          // avoid deprecated `withOpacity` on Color; use withAlpha for equivalent effect
-          color: scheme.surface.withAlpha((0.6 * 255).round()),
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 200),
+        opacity: enabled ? 1.0 : 0.35,
+        child: IgnorePointer(
+          ignoring: !enabled,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              // avoid deprecated `withOpacity` on Color; use withAlpha for equivalent effect
+              color: scheme.surface.withAlpha((0.6 * 255).round()),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
             // LINHA 1 — modos + undo/redo + preview (com scroll horizontal p/ evitar overflow)
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -97,6 +257,7 @@ class AnnotationToolbar extends StatelessWidget {
                     icon: Icons.brush_rounded,
                     label: 'Desenhar',
                     onTap: () => onModeChanged(StrokeMode.pen),
+                    enabled: enabled,
                   ),
                   const SizedBox(width: 8),
                   _ModeButton(
@@ -104,16 +265,17 @@ class AnnotationToolbar extends StatelessWidget {
                     icon: Icons.auto_fix_off_rounded,
                     label: 'Borracha',
                     onTap: () => onModeChanged(StrokeMode.eraser),
+                    enabled: enabled,
                   ),
                   const SizedBox(width: 12),
                   IconButton(
                     tooltip: 'Anular',
-                    onPressed: canUndo ? onUndo : null,
+                    onPressed: (canUndo && enabled) ? onUndo : null,
                     icon: const Icon(Icons.undo_rounded),
                   ),
                   IconButton(
                     tooltip: 'Refazer',
-                    onPressed: canRedo ? onRedo : null,
+                    onPressed: (canRedo && enabled) ? onRedo : null,
                     icon: const Icon(Icons.redo_rounded),
                   ),
                   const SizedBox(width: 8),
@@ -126,8 +288,9 @@ class AnnotationToolbar extends StatelessWidget {
             // LINHA 2 — paleta + botão do espectro JUNTOS
             _ColorPaletteWithPicker(
               selected: color,
-              onChanged: onColorChanged,
-              onPickMore: () => _pickColor(context),
+              onChanged: (c) { if (enabled) onColorChanged(c); },
+              onPickMore: () { if (enabled) _pickColor(context); },
+              enabled: enabled,
             ),
 
             const SizedBox(height: 4),
@@ -136,12 +299,12 @@ class AnnotationToolbar extends StatelessWidget {
             Row(
               children: [
                 const Icon(Icons.horizontal_rule_rounded, size: 18),
-                Expanded(
+                    Expanded(
                     child: Slider(
                     value: (isEraser ? eraserWidth : width).clamp(1, 48).toDouble(),
                     min: 1,
                     max: 48,
-                    onChanged: isEraser ? onEraserWidthChanged : onWidthChanged,
+                    onChanged: enabled ? (isEraser ? onEraserWidthChanged : onWidthChanged) : null,
                   ),
                 ),
                 const Icon(Icons.add_rounded, size: 18),
@@ -150,7 +313,9 @@ class AnnotationToolbar extends StatelessWidget {
           ],
         ),
       ),
-    );
+    ),
+  ),
+);
   }
 }
 
@@ -160,18 +325,20 @@ class _ModeButton extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.enabled = true,
   });
 
   final bool selected;
   final IconData icon;
   final String label;
   final VoidCallback onTap;
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return InkWell(
-      onTap: onTap,
+      onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(12),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -205,11 +372,13 @@ class _ColorPaletteWithPicker extends StatelessWidget {
     required this.selected,
     required this.onChanged,
     required this.onPickMore,
+    this.enabled = true,
   });
 
   final int selected;
   final ValueChanged<int> onChanged;
   final VoidCallback onPickMore;
+  final bool enabled;
 
   // Paleta “ScrollCast”
   static const _colors = <int>[
@@ -239,7 +408,7 @@ class _ColorPaletteWithPicker extends StatelessWidget {
             return Tooltip(
               message: 'Mais cores…',
               child: InkWell(
-                onTap: onPickMore,
+                onTap: enabled ? onPickMore : null,
                 borderRadius: BorderRadius.circular(16),
                 child: Container(
                   width: 32,
@@ -261,7 +430,7 @@ class _ColorPaletteWithPicker extends StatelessWidget {
           final c = _colors[i];
           final isSel = c == selected;
           return GestureDetector(
-            onTap: () => onChanged(c),
+            onTap: enabled ? () => onChanged(c) : null,
             child: Container(
               width: 28,
               height: 28,

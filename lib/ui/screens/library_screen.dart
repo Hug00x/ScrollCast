@@ -109,6 +109,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         originalPath: newPath,
         pageCount: count,
         lastOpened: DateTime.now(),
+        lastPage: 0,
       );
       await ServiceLocator.instance.db.upsertPdf(model);
       await _load();

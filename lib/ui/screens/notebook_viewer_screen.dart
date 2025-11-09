@@ -44,7 +44,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
 
   StrokeMode _mode = StrokeMode.pen;
   double _width = 4;
-  int _color = 0xFF00FF00;
+  int _color = 0xFF000000;
   double _eraserWidth = 18;
 
   final _ivController = TransformationController();
@@ -75,16 +75,39 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   @override
   void dispose() {
     _noteEditor.dispose();
+    // persist last opened page and timestamp (fire-and-forget)
+    () async {
+      try {
+        final db = ServiceLocator.instance.db;
+        final model = await db.getNotebookById(widget.args.notebookId);
+        if (model != null) {
+          await db.upsertNotebook(model.copyWith(lastOpened: DateTime.now(), lastPage: _pageIndex));
+        }
+      } catch (_) {}
+    }();
     super.dispose();
   }
 
   Future<void> _initNotebook() async {
-    final existing = await ServiceLocator.instance.db.getAllAnnotations(_nbId);
+    final db = ServiceLocator.instance.db;
+    final existing = await db.getAllAnnotations(_nbId);
     if (existing.isNotEmpty) {
       _pageCount = (existing.map((e) => e.pageIndex).fold<int>(0, (m, i) => i > m ? i : m)) + 1;
     } else {
       _pageCount = 1;
     }
+
+    try {
+      final model = await db.getNotebookById(widget.args.notebookId);
+      if (model != null) {
+        _pageIndex = model.lastPage.clamp(0, math.max(0, _pageCount - 1)).toInt();
+        // if stored pageCount differs from actual, update the stored model
+        if (model.pageCount != _pageCount) {
+          await db.upsertNotebook(model.copyWith(pageCount: _pageCount, lastOpened: DateTime.now(), lastPage: _pageIndex));
+        }
+      }
+    } catch (_) {}
+
     await _loadPage(_pageIndex);
     setState(() {});
   }
@@ -132,9 +155,9 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     );
   }
 
-  Future<void> _goTo(int i) async {
+  Future<void> _goTo(int i, {bool saveCurrent = true}) async {
     if (i < 0 || i >= _pageCount || i == _pageIndex) return;
-    await _savePage();
+    if (saveCurrent) await _savePage();
     await _loadPage(i);
     setState(() => _pageIndex = i);
   }
@@ -144,14 +167,92 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
     setState(() => _pageCount += 1);
     await _goTo(_pageCount - 1);
+    try {
+      final db = ServiceLocator.instance.db;
+      final model = await db.getNotebookById(widget.args.notebookId);
+      if (model != null) {
+        await db.upsertNotebook(model.copyWith(pageCount: _pageCount, lastOpened: DateTime.now(), lastPage: _pageIndex));
+      }
+    } catch (_) {}
   }
 
   Future<void> _removeCurrentPage() async {
     if (_pageCount <= 1) return;
-    await ServiceLocator.instance.db.deleteAnnotations(_nbId, pageIndex: _pageIndex);
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Remover página'),
+        content: const Text('Tem a certeza de que pretende apagar a página atual? Esta ação não pode ser desfeita.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apagar')),
+        ],
+      ),
+    );
+    if (confirm != true) return;
+
+    final db = ServiceLocator.instance.db;
+
+    // delete the current page from both possible stores (legacy annotations and notebook_pages)
+    await db.deleteAnnotations(_nbId, pageIndex: _pageIndex);
+    await db.deleteNotebookPages(_nbId, pageIndex: _pageIndex);
+
+    // shift subsequent pages down by one (so indexes remain contiguous)
+    // handle legacy annotations storage
+    final remainingAnn = await db.getAllAnnotations(_nbId);
+    final toShiftAnn = remainingAnn.where((p) => p.pageIndex > _pageIndex).toList()
+      ..sort((a, b) => a.pageIndex.compareTo(b.pageIndex));
+
+    for (final p in toShiftAnn) {
+      await db.deleteAnnotations(_nbId, pageIndex: p.pageIndex);
+      final shifted = PageAnnotations(
+        pdfId: p.pdfId,
+        pageIndex: p.pageIndex - 1,
+        strokes: List.of(p.strokes),
+        textNotes: List.of(p.textNotes),
+        audioNotes: List.of(p.audioNotes),
+        imageNotes: List.of(p.imageNotes),
+      );
+      await db.savePageAnnotations(shifted);
+    }
+
+    // handle notebook_pages storage (newer API)
+    final remainingNb = await db.getAllNotebookPages(_nbId);
+    final toShiftNb = remainingNb.where((p) => p.pageIndex > _pageIndex).toList()
+      ..sort((a, b) => a.pageIndex.compareTo(b.pageIndex));
+
+    for (final p in toShiftNb) {
+      await db.deleteNotebookPages(_nbId, pageIndex: p.pageIndex);
+      final shifted = PageAnnotations(
+        pdfId: p.pdfId,
+        pageIndex: p.pageIndex - 1,
+        strokes: List.of(p.strokes),
+        textNotes: List.of(p.textNotes),
+        audioNotes: List.of(p.audioNotes),
+        imageNotes: List.of(p.imageNotes),
+      );
+      await db.saveNotebookPage(notebookId: _nbId, pageIndex: p.pageIndex - 1, page: shifted);
+    }
+
     final nextIndex = _pageIndex.clamp(0, _pageCount - 2);
-    setState(() => _pageCount -= 1);
-    await _goTo(nextIndex);
+
+    // load the next page explicitly (don't rely on _goTo which may early-return
+    // when the requested index equals the current _pageIndex). We also update
+    // _pageIndex after loading so the UI will reflect the new page contents.
+    await _loadPage(nextIndex);
+    setState(() {
+      _pageCount -= 1;
+      _pageIndex = nextIndex;
+    });
+
+    try {
+      final model = await db.getNotebookById(widget.args.notebookId);
+      if (model != null) {
+        final newLast = (_pageIndex <= model.lastPage && model.lastPage > 0) ? (model.lastPage - 1) : model.lastPage.clamp(0, math.max(0, _pageCount - 1)).toInt();
+        await db.upsertNotebook(model.copyWith(pageCount: _pageCount, lastOpened: DateTime.now(), lastPage: newLast));
+      }
+    } catch (_) {}
   }
 
   // undo/redo
@@ -403,6 +504,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                   onRedo: _onRedo,
                   canUndo: _undoStack.isNotEmpty,
                   canRedo: _redoStack.isNotEmpty,
+                  enabled: !_handMode,
                   eraserWidth: _eraserWidth,
                   onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
                 ),

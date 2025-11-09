@@ -49,7 +49,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
 
   StrokeMode _mode = StrokeMode.pen;
   double _width = 4;
-  int _color = 0xFF00FF00;
+  int _color = 0xFF000000;
   double _eraserWidth = 18;
 
   final _ivController = TransformationController();
@@ -77,20 +77,43 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     _initDoc();
   }
 
-  @override
-  void dispose() {
-    _noteEditor.dispose();
-    super.dispose();
-  }
+  // Note: dispose is implemented below with extra persistence logic.
 
   Future<void> _initDoc() async {
     setState(() => _loading = true);
     final pdf = ServiceLocator.instance.pdf;
+    final db = ServiceLocator.instance.db;
     final count = await pdf.getPageCount(widget.args.path);
     setState(() => _pageCount = count);
+
+    // try to restore last page for this document
+    try {
+      final model = await db.getPdfById(widget.args.pdfId);
+      if (model != null) {
+        final last = model.lastPage.clamp(0, math.max(0, count - 1)).toInt();
+        _pageIndex = last;
+      }
+    } catch (_) {}
+
     await _ensureRendered(_pageIndex);
     await _loadAnnotations(_pageIndex);
     setState(() => _loading = false);
+  }
+
+  @override
+  void dispose() {
+    _noteEditor.dispose();
+    // persist last opened page and timestamp (fire-and-forget)
+    () async {
+      try {
+        final db = ServiceLocator.instance.db;
+        final model = await db.getPdfById(widget.args.pdfId);
+        if (model != null) {
+          await db.upsertPdf(model.copyWith(lastOpened: DateTime.now(), lastPage: _pageIndex));
+        }
+      } catch (_) {}
+    }();
+    super.dispose();
   }
 
   Future<void> _ensureRendered(int i) async {
@@ -389,6 +412,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                   onRedo: _onRedo,
                   canUndo: _undoStack.isNotEmpty,
                   canRedo: _redoStack.isNotEmpty,
+                  enabled: !_handMode,
                   eraserWidth: _eraserWidth,
                   onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
                 ),

@@ -6,6 +6,7 @@ class NotebookModel {
   final String? folder;       // pasta (null = “raiz”)
   final int pageCount;
   final DateTime lastOpened;
+  final int lastPage;
 
   const NotebookModel({
     required this.id,
@@ -13,6 +14,7 @@ class NotebookModel {
     required this.pageCount,
     required this.lastOpened,
     this.folder,
+    this.lastPage = 0,
   });
 
   NotebookModel copyWith({
@@ -21,6 +23,7 @@ class NotebookModel {
     String? folder,
     int? pageCount,
     DateTime? lastOpened,
+    int? lastPage,
   }) {
     return NotebookModel(
       id: id ?? this.id,
@@ -28,6 +31,7 @@ class NotebookModel {
       folder: folder ?? this.folder,
       pageCount: pageCount ?? this.pageCount,
       lastOpened: lastOpened ?? this.lastOpened,
+      lastPage: lastPage ?? this.lastPage,
     );
   }
 
@@ -37,6 +41,7 @@ class NotebookModel {
     'folder': folder,
     'pageCount': pageCount,
     'lastOpened': lastOpened.millisecondsSinceEpoch,
+    'lastPage': lastPage,
   };
 
   factory NotebookModel.fromMap(Map<String, dynamic> map) => NotebookModel(
@@ -45,6 +50,7 @@ class NotebookModel {
     folder: map['folder'] as String?,
     pageCount: map['pageCount'] as int,
     lastOpened: DateTime.fromMillisecondsSinceEpoch(map['lastOpened'] as int),
+    lastPage: (map['lastPage'] as int?) ?? 0,
   );
 
   String toJson() => json.encode(toMap());

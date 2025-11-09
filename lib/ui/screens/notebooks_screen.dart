@@ -102,6 +102,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       folder: folderCtrl.text.trim().isEmpty ? null : folderCtrl.text.trim(),
       pageCount: 1,
       lastOpened: DateTime.now(),
+      lastPage: 0,
     );
 
     await ServiceLocator.instance.db.upsertNotebook(nb);

@@ -7,6 +7,7 @@ class PdfDocumentModel {
   final String? annotatedPath;
   final int pageCount;
   final DateTime lastOpened;
+  final int lastPage;
 
   PdfDocumentModel({
     required this.id,
@@ -15,6 +16,7 @@ class PdfDocumentModel {
     required this.pageCount,
     required this.lastOpened,
     this.annotatedPath,
+    this.lastPage = 0,
   });
 
   PdfDocumentModel copyWith({
@@ -24,6 +26,7 @@ class PdfDocumentModel {
     String? annotatedPath,
     int? pageCount,
     DateTime? lastOpened,
+    int? lastPage,
   }) {
     return PdfDocumentModel(
       id: id ?? this.id,
@@ -32,6 +35,7 @@ class PdfDocumentModel {
       annotatedPath: annotatedPath ?? this.annotatedPath,
       pageCount: pageCount ?? this.pageCount,
       lastOpened: lastOpened ?? this.lastOpened,
+      lastPage: lastPage ?? this.lastPage,
     );
   }
 
@@ -41,7 +45,8 @@ class PdfDocumentModel {
         'originalPath': originalPath,
         'annotatedPath': annotatedPath,
         'pageCount': pageCount,
-        'lastOpened': lastOpened.millisecondsSinceEpoch,
+    'lastOpened': lastOpened.millisecondsSinceEpoch,
+    'lastPage': lastPage,
       };
 
   factory PdfDocumentModel.fromMap(Map<String, dynamic> map) => PdfDocumentModel(
@@ -50,7 +55,8 @@ class PdfDocumentModel {
         originalPath: map['originalPath'] as String,
         annotatedPath: map['annotatedPath'] as String?,
         pageCount: map['pageCount'] as int,
-        lastOpened: DateTime.fromMillisecondsSinceEpoch(map['lastOpened'] as int),
+    lastOpened: DateTime.fromMillisecondsSinceEpoch(map['lastOpened'] as int),
+    lastPage: (map['lastPage'] as int?) ?? 0,
       );
 
   String toJson() => json.encode(toMap());
