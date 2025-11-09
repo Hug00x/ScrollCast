@@ -11,8 +11,10 @@ class AnnotationToolbar extends StatelessWidget {
     required this.onWidthChanged,
     required this.color,
     required this.onColorChanged,
-    this.onUndo,
-    this.onRedo,
+      this.onUndo,
+      this.onRedo,
+      this.canUndo = false,
+      this.canRedo = false,
     required this.eraserWidth,
     required this.onEraserWidthChanged,
   });
@@ -28,6 +30,8 @@ class AnnotationToolbar extends StatelessWidget {
 
   final VoidCallback? onUndo;
   final VoidCallback? onRedo;
+  final bool canUndo;
+  final bool canRedo;
 
   final double eraserWidth;
   final ValueChanged<double> onEraserWidthChanged;
@@ -104,12 +108,12 @@ class AnnotationToolbar extends StatelessWidget {
                   const SizedBox(width: 12),
                   IconButton(
                     tooltip: 'Anular',
-                    onPressed: onUndo,
+                    onPressed: canUndo ? onUndo : null,
                     icon: const Icon(Icons.undo_rounded),
                   ),
                   IconButton(
                     tooltip: 'Refazer',
-                    onPressed: onRedo,
+                    onPressed: canRedo ? onRedo : null,
                     icon: const Icon(Icons.redo_rounded),
                   ),
                   const SizedBox(width: 8),

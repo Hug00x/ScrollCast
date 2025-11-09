@@ -18,13 +18,6 @@ class StorageServiceImpl implements StorageService {
   @override
   Future<String> appRoot() async => (await _userRootDir()).path;
 
-  @override
-  Future<String> exportedPdfDir() async {
-    final root = await _userRootDir();
-    final dir = Directory(p.join(root.path, 'exported'));
-    if (!await dir.exists()) await dir.create(recursive: true);
-    return dir.path;
-  }
 
   @override
   Future<String> audioDir() async {

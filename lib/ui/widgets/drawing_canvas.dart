@@ -19,6 +19,8 @@ class DrawingCanvas extends StatefulWidget {
 
   // avisa o pai quando a borracha modificar os traços
   final VoidCallback? onStrokesChanged;
+  /// Called once when the eraser interaction starts. Use to snapshot state for undo.
+  final VoidCallback? onBeforeErase;
 
   // >>> NOVO: se true, só caneta (stylus) pode desenhar; dedos são ignorados
   final bool stylusOnly;
@@ -36,6 +38,7 @@ class DrawingCanvas extends StatefulWidget {
     this.onPointerCountChanged,
     this.eraserWidthPreview,
     this.onStrokesChanged,
+    this.onBeforeErase,
     this.stylusOnly = false,
     this.onStylusContact,
   });
@@ -96,6 +99,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
         if (_activePoints.length == 1) {
           if (isEraser) {
+            // inform the parent that erasing is about to start so it can snapshot for undo
+            widget.onBeforeErase?.call();
             _eraserCenter = e.localPosition;
           } else {
             _currentLine

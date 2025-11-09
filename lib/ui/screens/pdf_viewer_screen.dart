@@ -39,7 +39,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   Uint8List? get _pageBytes => _pageCache[_pageIndex];
 
   final _strokes = <Stroke>[];
-  final _undo = <Stroke>[];
+  final List<List<Stroke>> _undoStack = [];
+  final List<List<Stroke>> _redoStack = [];
   final _audioNotes = <AudioNote>[];
   final _textNotes = <TextNote>[];
   final _imageNotes = <ImageNote>[];
@@ -105,7 +106,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     _strokes
       ..clear()
       ..addAll(ann?.strokes ?? const []);
-    _undo.clear();
+  _undoStack.clear();
+  _redoStack.clear();
     _audioNotes
       ..clear()
       ..addAll(ann?.audioNotes ?? const []);
@@ -161,15 +163,36 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   }
 
   Future<void> _onUndo() async {
-    if (_strokes.isEmpty) return;
-    setState(() => _undo.add(_strokes.removeLast()));
+    if (_undoStack.isEmpty) return;
+    _redoStack.add(_cloneStrokes(_strokes));
+    final prev = _undoStack.removeLast();
+    setState(() {
+      _strokes
+        ..clear()
+        ..addAll(prev.map((s) => _cloneStroke(s)));
+    });
     await _savePage();
   }
 
   Future<void> _onRedo() async {
-    if (_undo.isEmpty) return;
-    setState(() => _strokes.add(_undo.removeLast()));
+    if (_redoStack.isEmpty) return;
+    _undoStack.add(_cloneStrokes(_strokes));
+    final next = _redoStack.removeLast();
+    setState(() {
+      _strokes
+        ..clear()
+        ..addAll(next.map((s) => _cloneStroke(s)));
+    });
     await _savePage();
+  }
+
+  List<Stroke> _cloneStrokes(List<Stroke> src) => src.map((s) => _cloneStroke(s)).toList();
+
+  Stroke _cloneStroke(Stroke s) => Stroke(points: List.of(s.points), width: s.width, color: s.color, mode: s.mode);
+
+  void _pushUndoSnapshot() {
+    _undoStack.add(_cloneStrokes(_strokes));
+    _redoStack.clear();
   }
 
   Offset _contentCenter(BuildContext context) {
@@ -364,6 +387,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                   onColorChanged: (c) => setState(() => _color = c),
                   onUndo: _onUndo,
                   onRedo: _onRedo,
+                  canUndo: _undoStack.isNotEmpty,
+                  canRedo: _redoStack.isNotEmpty,
                   eraserWidth: _eraserWidth,
                   onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
                 ),
@@ -422,6 +447,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                         strokeColor: _color,
                                         stylusOnly: _stylusEverSeen,
                                         onStrokeEnd: (s) async {
+                                          _pushUndoSnapshot();
                                           setState(() => _strokes.add(s));
                                           await _savePage();
                                         },
@@ -433,6 +459,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                         onStrokesChanged: () async {
                                           await _savePage();
                                         },
+                                        onBeforeErase: () => _pushUndoSnapshot(),
                                         onStylusContact: (down) {
                                           if (down && !_stylusEverSeen) {
                                             if (mounted) setState(() => _stylusEverSeen = true);

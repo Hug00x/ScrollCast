@@ -34,7 +34,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   int _pageIndex = 0;
 
   final _strokes = <Stroke>[];
-  final _undo = <Stroke>[];
+  final List<List<Stroke>> _undoStack = [];
+  final List<List<Stroke>> _redoStack = [];
   final _audioNotes = <AudioNote>[];
   final _textNotes = <TextNote>[];
   final _imageNotes = <ImageNote>[];
@@ -94,7 +95,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     _strokes
       ..clear()
       ..addAll(ann?.strokes ?? const []);
-    _undo.clear();
+  _undoStack.clear();
+  _redoStack.clear();
     _audioNotes
       ..clear()
       ..addAll(ann?.audioNotes ?? const []);
@@ -154,15 +156,40 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
 
   // undo/redo
   Future<void> _onUndo() async {
-    if (_strokes.isEmpty) return;
-    setState(() => _undo.add(_strokes.removeLast()));
+    if (_undoStack.isEmpty) return;
+    // push current state to redo
+    _redoStack.add(_cloneStrokes(_strokes));
+    // restore previous
+    final prev = _undoStack.removeLast();
+    setState(() {
+      _strokes
+        ..clear()
+        ..addAll(prev.map((s) => _cloneStroke(s)));
+    });
     await _savePage();
   }
 
   Future<void> _onRedo() async {
-    if (_undo.isEmpty) return;
-    setState(() => _strokes.add(_undo.removeLast()));
+    if (_redoStack.isEmpty) return;
+    // push current state to undo
+    _undoStack.add(_cloneStrokes(_strokes));
+    final next = _redoStack.removeLast();
+    setState(() {
+      _strokes
+        ..clear()
+        ..addAll(next.map((s) => _cloneStroke(s)));
+    });
     await _savePage();
+  }
+
+  List<Stroke> _cloneStrokes(List<Stroke> src) => src.map((s) => _cloneStroke(s)).toList();
+
+  Stroke _cloneStroke(Stroke s) => Stroke(points: List.of(s.points), width: s.width, color: s.color, mode: s.mode);
+
+  void _pushUndoSnapshot() {
+    _undoStack.add(_cloneStrokes(_strokes));
+    // keep redo cleared when user makes a new action
+    _redoStack.clear();
   }
 
   // notas
@@ -374,6 +401,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                   onColorChanged: (c) => setState(() => _color = c),
                   onUndo: _onUndo,
                   onRedo: _onRedo,
+                  canUndo: _undoStack.isNotEmpty,
+                  canRedo: _redoStack.isNotEmpty,
                   eraserWidth: _eraserWidth,
                   onEraserWidthChanged: (v) => setState(() => _eraserWidth = v),
                 ),
@@ -444,6 +473,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                         strokeColor: _color,
                                         stylusOnly: _stylusEverSeen,
                                         onStrokeEnd: (s) async {
+                                          _pushUndoSnapshot();
                                           setState(() => _strokes.add(s));
                                           await _savePage();
                                         },
@@ -457,6 +487,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                         onStrokesChanged: () async {
                                           await _savePage();
                                         },
+                                        onBeforeErase: () => _pushUndoSnapshot(),
                                         onStylusContact: (down) {
                                           if (down && !_stylusEverSeen) {
                                             if (mounted) setState(() => _stylusEverSeen = true);
