@@ -1,12 +1,27 @@
-// lib/ui/screens/library_screen.dart
 import 'dart:async';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
-
 import '../../main.dart';
 import '../../models/pdf_document_model.dart';
 import '../screens/pdf_viewer_screen.dart';
+
+/*
+  LibraryScreen
+
+  Propósito geral:
+  - Apresenta a lista de PDFs importados pelo utilizador.
+  - Permite pesquisar, marcar favoritos, importar novos PDFs e apagar
+    PDFs (com limpeza de ficheiros e anotações associadas).
+  - Usa o DatabaseService (via ServiceLocator) para operações persistentes
+    e mantém um conjunto em memória de favoritos para UI rápida.
+
+  Organização do ficheiro:
+  - `_LibraryScreenState` contém o estado da lista, pesquisa, favoritos
+    e os métodos para importar/apagar PDFs.
+  - `build()` monta a AppBar com uma barra de pesquisa e a listagem
+    dos PDFs, além do FAB para importar.
+*/
 
 class LibraryScreen extends StatefulWidget {
   static const route = '/';
@@ -20,11 +35,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
   List<PdfDocumentModel> _items = [];
   bool _busy = false;
 
-  // favoritos em memória + sub de eventos
+  // Favoritos em memória.
   Set<String> _favIds = <String>{};
   StreamSubscription<void>? _favSub;
 
-  // pesquisa
+  // FIltro de pesquisa.
   final TextEditingController _searchCtrl = TextEditingController();
   String _query = '';
   Timer? _debounce;
@@ -32,6 +47,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   @override
   void initState() {
     super.initState();
+    // Inicialização: carrega a lista de PDFs e subscreve eventos de
+    // favoritos para atualizar a UI quando algo mudar noutra parte da app.
     _load();
     _favSub = ServiceLocator.instance.db.favoritesEvents().listen((_) {
       _loadFavorites();
@@ -40,6 +57,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   @override
   void dispose() {
+    // Limpeza de timers/subscrições e controllers ao desmontar o widget.
     _debounce?.cancel();
     _favSub?.cancel();
     _searchCtrl.dispose();
@@ -47,6 +65,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _load() async {
+    // Carrega os PDFs (com o filtro de pesquisa `_query`) ordenando por última abertura. 
+    // Também carrega os favoritos para manter o estado visual consistente.
     final docs = await ServiceLocator.instance.db.listPdfs(query: _query);
     docs.sort((a, b) => b.lastOpened.compareTo(a.lastOpened));
     final favDocs = await ServiceLocator.instance.db.listFavorites();
@@ -58,6 +78,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _loadFavorites() async {
+    // Recarrega apenas os favoritos (utilizado quando a fonte de favoritos
+    // em DatabaseService emite um evento para sincronizar a UI).
     final favDocs = await ServiceLocator.instance.db.listFavorites();
     if (!mounted) return;
     setState(() {
@@ -66,6 +88,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   void _onSearchChanged(String value) {
+    // Debounce simples para evitar disparar muitas pesquisas enquanto o
+    // utilizador digita: espera 180ms após a última tecla.
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 180), () {
       _query = value.trim();
@@ -74,6 +98,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _toggleFavorite(PdfDocumentModel d) async {
+    // Alterna o estado de favorito no DatabaseService e atualiza o set
+    // local `_favIds` para resposta imediata na UI.
     final isFav = _favIds.contains(d.id);
     await ServiceLocator.instance.db.setFavorite(d.id, !isFav);
     if (!mounted) return;
@@ -87,6 +113,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Future<void> _importPdf() async {
+    // Importa um ficheiro PDF via file picker, copia-o para a pasta da
+    // aplicação, obtém o número de páginas e regista um novo modelo no DB.
     try {
       final picked = await FilePicker.platform.pickFiles(
         type: FileType.custom,
@@ -126,7 +154,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       }
     }
   }
-
+  //Apaga um PDF e todos os recursos associados (anotações, áudios, imagens, notas)
   Future<void> _deletePdf(PdfDocumentModel d) async {
     if (_busy) return;
     final confirm = await showDialog<bool>(
@@ -135,7 +163,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         title: const Text('Apagar PDF'),
         content: Text(
           'Tens a certeza que queres apagar "${d.name}"?\n'
-          'Isto remove o ficheiro, as anotações e os áudios associados.',
+          'Isto remove o ficheiro, as anotações, os áudios e imagens associadas.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
@@ -144,7 +172,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ),
     );
     if (confirm != true) return;
-
+    
+    // Ao tentar apagar, o processo é envolvido em try/catch para notificar o utilizador em caso
+    // de erro e usamos `_busy` para bloquear interacções enquanto decorre.
     setState(() => _busy = true);
     final db = ServiceLocator.instance.db;
     final storage = ServiceLocator.instance.storage;
@@ -179,7 +209,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   Shader _titleGradient(Rect bounds) {
-    // amarelo → verde → azul claro (estilo ScrollCast)
     return const LinearGradient(
       colors: [
         Color(0xFFFFC107),
@@ -198,7 +227,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
     // cor visível para ícone não-favorito (claro e escuro)
     final Color unfavColor = cs.onSurfaceVariant.withAlpha((0.55 * 255).round());
 
-    return Scaffold(
+  // ===== Build: AppBar com pesquisa + listagem de PDFs =====
+  // A AppBar contém um campo de pesquisa. O corpo mostra
+  // a lista de PDFs (ou uma mensagem vazia) e inclui um FAB para importar.
+  return Scaffold(
       appBar: AppBar(
         title: const Text('Os meus PDFs'),
         bottom: PreferredSize(
@@ -237,7 +269,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   itemBuilder: (_, i) {
                     final d = _items[i];
                     final isFav = _favIds.contains(d.id);
+                    // ----- Item da lista de PDF -----
+                    // Cada ListTile mostra o estado de favorito, o
+                    // título com gradiente, subtítulo com contagem de páginas,
+                    // ação de abertura ao tocar e ações rápidas no trailing.
                     return ListTile(
+                      // Leading: ícone de favorito; tocar alterna o estado.
                       leading: InkResponse(
                         onTap: () => _toggleFavorite(d),
                         radius: 24,
@@ -249,6 +286,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               )
                             : Icon(Icons.star_border, size: 24, color: unfavColor),
                       ),
+                      // Title: aplica o gradiente.
                       title: ShaderMask(
                         shaderCallback: _titleGradient,
                         blendMode: BlendMode.srcIn,
@@ -261,7 +299,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
                               ),
                         ),
                       ),
+                      // Subtitle: informação auxiliar (páginas).
                       subtitle: Text('${d.pageCount} páginas'),
+                      // onTap: abre o PdfViewerScreen; ao regressar recarrega a lista
+                      // para refletir possíveis mudanças feitas durante a edição.
                       onTap: () => Navigator.pushNamed(
                         context,
                         PdfViewerScreen.route,
@@ -271,6 +312,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           path: d.originalPath,
                         ),
                       ).then((_) => _load()),
+                      // Trailing: ações rápidas: apagar e chevron (indicador visual).
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -285,6 +327,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     );
                   },
                 ),
+          //Overlay de carregamento
           if (_busy)
             const Positioned.fill(
               child: IgnorePointer(
@@ -296,6 +339,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             ),
         ],
       ),
+      //Botão flutuante para importar PDFs
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'library_import_fab',
         onPressed: _busy ? null : _importPdf,

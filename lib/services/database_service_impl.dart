@@ -1,34 +1,55 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:hive/hive.dart';
-
 import '../models/pdf_document_model.dart';
 import '../models/annotations.dart';
 import 'database_service.dart';
 import '../main.dart';
 import '../models/notebook_model.dart';
 
+// database_service_impl.dart
+//
+// Propósito geral:
+// - Implementação de `DatabaseService` usando Hive para persistência local.
+// - Gira em torno de várias boxes dependentes do UID do utilizador para
+//   armazenar PDFs, anotações por página, favoritos, cadernos (notebooks)
+//   e páginas de notebooks.
+// - Fornece métodos CRUD para objetos de domínio (PdfDocumentModel,
+//   PageAnnotations, NotebookModel), bem como streams/notifications para
+//   eventos relevantes.
+//
+// Notas de implementação:
+// - Cada box é nomeada com o UID para isolar dados entre utilizadores.
+// - Há lógica para fechar boxes do UID anterior quando o utilizador muda de
+//   conta (ver `onAccountSwitched`).
+// - Anotações de páginas são serializadas como JSON dentro da box `annotations`.
+
 class DatabaseServiceImpl implements DatabaseService {
   // Mantém o último UID usado para conseguirmos fechar as boxes antigas
   String? _lastUid;
 
+  // Getter que devolve o uid atual com fallback para '_anon'. Também
+  // inicializa _lastUid na primeira chamada.
   String get _uid {
     final u = ServiceLocator.instance.auth.currentUid ?? '_anon';
     _lastUid ??= u;
     return u;
   }
 
-  // Boxes (dependentes do UID)
+  // ===== Nomes das boxes dependentes do UID =====
   String get _pdfsBoxName   => 'pdfs_$_uid';
   String get _annBoxName    => 'annotations_$_uid';
   String get _favBoxName    => 'favorites_$_uid';
   String get _nbBoxName     => 'notebooks_$_uid';
   String get _nbPagesName   => 'notebook_pages_$_uid';
 
+  // Abre uma box Hive se ainda não estiver aberta (reutiliza se já aberta).
   Future<Box> _open(String name) async =>
       Hive.isBoxOpen(name) ? Hive.box(name) : await Hive.openBox(name);
 
-  // 🔔 Stream de favoritos
+  // ===== Stream de favoritos =====
+  // Usamos um StreamController broadcast para notificar listeners quando os
+  // favoritos mudam (setFavorite/delete). A stream exposta é `favoritesEvents()`.
   final _favEventsCtrl = StreamController<void>.broadcast();
   @override
   Stream<void> favoritesEvents() => _favEventsCtrl.stream;
@@ -37,12 +58,14 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   // ===== PDFs =====
+  // upsertPdf: insere ou atualiza o PdfDocumentModel na box de PDFs.
   @override
   Future<void> upsertPdf(PdfDocumentModel doc) async {
     final box = await _open(_pdfsBoxName);
     await box.put(doc.id, doc.toMap());
   }
 
+  // getPdfById: recupera um PDF por id e desserializa para PdfDocumentModel.
   @override
   Future<PdfDocumentModel?> getPdfById(String id) async {
     final box = await _open(_pdfsBoxName);
@@ -51,6 +74,7 @@ class DatabaseServiceImpl implements DatabaseService {
     return PdfDocumentModel.fromMap(Map<String, dynamic>.from(map));
   }
 
+  // listPdfs: lista todos os PDFs, com opção de filtrar por query no nome.
   @override
   Future<List<PdfDocumentModel>> listPdfs({String? query}) async {
     final box = await _open(_pdfsBoxName);
@@ -63,6 +87,8 @@ class DatabaseServiceImpl implements DatabaseService {
     return items.where((d) => d.name.toLowerCase().contains(q)).toList();
   }
 
+  // deletePdf: remove o PDF, as anotações associadas e também o remove dos
+  // favoritos.
   @override
   Future<void> deletePdf(String id) async {
     final box = await _open(_pdfsBoxName);
@@ -80,6 +106,8 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   // ===== Anotações do PDF =====
+  // As anotações por página são guardadas na box `annotations` usando a chave
+  // 'pdfId:pageIndex' e com o conteúdo serializado em JSON.
   @override
   Future<void> savePageAnnotations(PageAnnotations page) async {
     final box = await _open(_annBoxName);
@@ -96,6 +124,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  //Obtém todas as anotações de um PDF
   Future<List<PageAnnotations>> getAllAnnotations(String pdfId) async {
     final box = await _open(_annBoxName);
     final prefix = '$pdfId:';
@@ -111,6 +140,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  //Apaga anotações
   Future<void> deleteAnnotations(String pdfId, {int? pageIndex}) async {
     final box = await _open(_annBoxName);
     if (pageIndex == null) {
@@ -122,6 +152,9 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   // ===== Favoritos =====
+  // setFavorite / isFavorite / listFavorites gerem a box de favoritos e
+  // permitem à UI marcar/desmarcar e listar favoritos (mantendo ordenação por
+  // lastOpened quando necessário).
   @override
   Future<void> setFavorite(String pdfId, bool isFav) async {
     final fav = await _open(_favBoxName);
@@ -132,8 +165,9 @@ class DatabaseServiceImpl implements DatabaseService {
     }
     _emitFav(); // 🔔 notifica ouvintes
   }
-
+  
   @override
+  // Verifica se um pdf é favorito
   Future<bool> isFavorite(String pdfId) async {
     final fav = await _open(_favBoxName);
     return fav.get(pdfId, defaultValue: false) == true;
@@ -158,6 +192,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  // Recupera um notebook por id e desserializa para NotebookModel
   Future<NotebookModel?> getNotebookById(String id) async {
     final box = await _open(_nbBoxName);
     final map = box.get(id);
@@ -166,6 +201,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  //Lista todos os notebooks, com opção de filtrar por pasta
   Future<List<NotebookModel>> listNotebooks({String? folder}) async {
     final box = await _open(_nbBoxName);
     final items = box.values
@@ -177,6 +213,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  //Lista todas as pastas de notebooks
   Future<List<String>> listNotebookFolders() async {
     final box = await _open(_nbBoxName);
     final items = box.values
@@ -190,6 +227,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  //Apaga um notebook e as suas páginas associadas
   Future<void> deleteNotebook(String id) async {
     final box = await _open(_nbBoxName);
     await box.delete(id);
@@ -200,6 +238,8 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   // ===== Páginas de notebook =====
+  // Guardamos as PageAnnotations na box `notebook_pages` usando a chave
+  // 'notebookId:pageIndex' com valor JSON.
   @override
   Future<void> saveNotebookPage({
     required String notebookId,
@@ -212,6 +252,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  //Obtém uma página específica de um notebook
   Future<PageAnnotations?> getNotebookPage(String notebookId, int pageIndex) async {
     final box = await _open(_nbPagesName);
     final raw = box.get('$notebookId:$pageIndex');
@@ -220,6 +261,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  //Obtém todas as páginas de um notebook
   Future<List<PageAnnotations>> getAllNotebookPages(String notebookId) async {
     final box = await _open(_nbPagesName);
     final prefix = '$notebookId:';
@@ -235,6 +277,7 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   @override
+  //Apaga páginas de notebook
   Future<void> deleteNotebookPages(String notebookId, {int? pageIndex}) async {
     final box = await _open(_nbPagesName);
     if (pageIndex == null) {
@@ -246,6 +289,8 @@ class DatabaseServiceImpl implements DatabaseService {
   }
 
   // ===== Troca de conta (fecha boxes do UID anterior) =====
+  // Fecha boxes correspondentes ao UID antigo para evitar elevar uso de
+  // recursos e a mistura de dados entre utilizadores.
   Future<void> _closeIfOpen(String name) async {
     if (Hive.isBoxOpen(name)) {
       await Hive.box(name).close();

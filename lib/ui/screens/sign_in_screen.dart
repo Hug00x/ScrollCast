@@ -1,17 +1,33 @@
-// ui/screens/sign_in_screen.dart
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-// The code below intentionally uses the BuildContext across an awaited
-// dialog call when handling an account-exists-with-different-credential
-// flow; we've guarded with `mounted` afterwards. Suppress the lint for
-// the file to avoid spurious analyzer warnings here.
-// ignore_for_file: use_build_context_synchronously
-
 import '../../main.dart';
 import '../auth_error_messages.dart';
 import '../../services/auth_service.dart' show AccountExistsWithDifferentCredential;
 import 'dart:async';
 import 'home_shell.dart';
+
+/*
+  sign_in_screen.dart
+
+  Propósito geral:
+  - Este ficheiro implementa a tela de entrada/autenticação da aplicação.
+  - Fornece campos para email/password, botão para entrar e botão para
+    autenticação com Google. Trata fluxos especiais como "account-exists-with-different-credential"
+    mostrando um diálogo para solicitar a password do utilizador existente e, se fornecida,
+    liga (link) a credencial Google ao utilizador.
+  - O widget usa um StatefulWidget para gerir estado local: indicadores de busy, visibilidade
+    da password e mensagens de erro. O método build inclui os widgets visuais (inputs,
+    botões e diálogos). Mantemos a construção limitada a uma largura máxima para uma boa
+    aparência em ecrãs largos.
+
+  Organização do ficheiro:
+  - O ficheiro deliberadamente utiliza o BuildContext através de uma chamada await quando
+    mostra um diálogo (ver _doGoogle). Isso normalmente dispara o lint
+    `use_build_context_synchronously`. O fluxo está protegido por verificações de `mounted`
+    logo após as operações assíncronas para prevenir usos inválidos do contexto.
+  - Navegação para a tela principal (`HomeShell`) é feita com `pushAndRemoveUntil` após
+    autenticação bem-sucedida para remover o histórico de navegação.
+*/
 
 class SignInScreen extends StatefulWidget {
   static const route = '/signin';
@@ -22,8 +38,19 @@ class SignInScreen extends StatefulWidget {
 }
 
 class _SignInScreenState extends State<SignInScreen> {
+  /*
+    Controladores de texto para os campos de email e password.
+    Mantemos o ciclo de vida e descartamos no dispose().
+  */
   final _email = TextEditingController();
   final _pass = TextEditingController();
+
+  /*
+    Estado local simples:
+    - _busy: indica operação em curso.
+    - _showPass: controla se a password está visível.
+    - _error: mensagem de erro a apresentar ao utilizador.
+  */
   bool _busy = false;
   bool _showPass = false;
   String? _error;
@@ -36,11 +63,17 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   void _unfocus() {
+    // Remove o foco dos campos de texto quando o utilizador inicia uma ação.
     final f = FocusScope.of(context);
     if (!f.hasPrimaryFocus && f.focusedChild != null) f.unfocus();
   }
 
   void _goHomeIfLogged() {
+    /*
+      Navega para o ecrã principal se houver um utilizador autenticado.
+      Usamos pushAndRemoveUntil para limpar a pilha e evitar que o utilizador
+      volte para o ecrã de login com o botão atrás.
+    */
     final uid = ServiceLocator.instance.auth.currentUid;
     if (uid != null && mounted) {
       Navigator.of(context).pushAndRemoveUntil(
@@ -51,6 +84,12 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   Future<List<String>> _safeFetchMethods(String email) async {
+    /*
+      Consulta segura dos métodos de login associados a um email.
+      - Retorna lista vazia em caso de email inválido ou erro de rede.
+      - Usada para detectar se a conta é Google e assim apresentar
+        uma mensagem apropriada ao utilizador.
+    */
     if (email.isEmpty || !email.contains('@')) return const <String>[];
     try {
       return await FirebaseAuth.instance.fetchSignInMethodsForEmail(email);
@@ -60,6 +99,17 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   Future<void> _doSignIn() async {
+    /*
+      Handler para o botão de autenticação por email/password.
+
+      Fluxo:
+      - Remove foco dos inputs
+      - Seta _busy para true para desativar UI.
+      - Verifica se a conta está ligada ao Google.
+      - Chama o serviço de autenticação e, em caso de sucesso, navega para Home.
+      - Em caso de erro, traduz a exceção para uma mensagem adequada.
+      - Garante reset de _busy no finally.
+    */
     _unfocus();
     setState(() { _busy = true; _error = null; });
     try {
@@ -68,16 +118,21 @@ class _SignInScreenState extends State<SignInScreen> {
 
       final methods = await _safeFetchMethods(email);
       if (methods.contains('google.com')) {
+        //Se conta já existe e usa Google, orienta o utilizador para o fluxo correto.
         setState(() => _error = 'Esta conta entra com Google. Usa "Continuar com Google".');
         return;
       }
 
       await ServiceLocator.instance.auth.signInWithEmail(email, pass);
-      _goHomeIfLogged(); // ⬅️ navega já
+  if (!mounted) return; // proteger uso de BuildContext após await
+  _goHomeIfLogged(); // navega para o ecrã principal
     } catch (e) {
+      // Se a autenticação interna não criou uma sessão, mostramos erro.
       if (ServiceLocator.instance.auth.currentUid == null) {
+        if (!mounted) return;
         setState(() => _error = friendlyAuthMessage(e));
       } else {
+        if (!mounted) return;
         _goHomeIfLogged();
       }
     } finally {
@@ -86,20 +141,34 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   Future<void> _doGoogle() async {
+    /*
+      Handler para autenticação com Google.
+
+      Fluxo normal:
+      - Chama o serviço de autenticação Google.
+      - Em sucesso, navega para Home.
+
+      Fluxo especial (AccountExistsWithDifferentCredential):
+      - Ocorre quando há uma conta existente com o mesmo email mas diferente
+        método de autenticação (email/password). Nesse caso pede ao
+        utilizador a password da conta existente através de um diálogo.
+      - Se o utilizador fornecer a password e o login por email for bem sucedido,
+        ligamos a credencial pendente do Google ao utilizador (linkWithCredential).
+    */
     _unfocus();
     setState(() { _busy = true; _error = null; });
     try {
-      await ServiceLocator.instance.auth.signInWithGoogle();
-      _goHomeIfLogged(); // ⬅️ navega já
+  await ServiceLocator.instance.auth.signInWithGoogle();
+  if (!mounted) return;
+  _goHomeIfLogged(); // navega para o ecrã principal
     } catch (e) {
-      // Special-case the account-exists-with-different-credential flow so we
-      // can offer to link the Google credential to an existing email/password
-      // account.
+      // Tratar fluxo especial onde a conta já existe com outro método
       if (e is AccountExistsWithDifferentCredential) {
         final email = e.email;
         final pending = e.pendingCredential;
-        // Ask the user for the password of the existing account so we can
-        // sign them in and then link the Google credential.
+
+        // Mostrar diálogo que pede a password da conta existente para que possa
+        // autenticar e depois ligar a credencial Google pendente.
         final pass = await showDialog<String>(
           context: context,
           builder: (ctx) {
@@ -120,31 +189,34 @@ class _SignInScreenState extends State<SignInScreen> {
               ],
             );
           },
-  );
+        );
 
-  if (!mounted) return;
+        if (!mounted) return; // proteger uso do contexto após await
 
-  if (pass != null && pass.isNotEmpty) {
+        if (pass != null && pass.isNotEmpty) {
           try {
+            // Tentar autenticar com email/password e então ligar a credencial Google.
             await ServiceLocator.instance.auth.signInWithEmail(email ?? '', pass);
-            // Now link the pending Google credential
             final user = FirebaseAuth.instance.currentUser;
             if (user != null) {
               await user.linkWithCredential(pending);
             }
+            if (!mounted) return;
             _goHomeIfLogged();
             return;
           } catch (linkErr) {
+            if (!mounted) return;
             setState(() => _error = friendlyAuthMessage(linkErr));
             return;
           }
         }
 
-        // user cancelled or didn't provide password
+        // Utilizador cancelou ou não forneceu password.
         setState(() => _error = 'Operação cancelada.');
         return;
       }
 
+      // Erro genérico: traduzir para mensagem amigável se não há sessão
       if (ServiceLocator.instance.auth.currentUid == null) {
         setState(() => _error = friendlyAuthMessage(e));
       } else {
@@ -176,6 +248,12 @@ class _SignInScreenState extends State<SignInScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    /*
+                      Cabeçalho visual (logotipo) e inputs.
+                      - Container estilizado com imagem da aplicação.
+                      - Campos de email e password.
+                      - O campo password tem um botão suffix para mostrar/esconder.
+                    */
                     Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
@@ -210,12 +288,14 @@ class _SignInScreenState extends State<SignInScreen> {
                     ),
                     const SizedBox(height: 12),
 
+                    // Mensagem de erro (se existir) apresentada ao utilizador
                     if (_error != null)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Text(_error!, style: TextStyle(color: cs.error), textAlign: TextAlign.center),
                       ),
 
+                    // Botão principal: Entrar com email/password
                     FilledButton(
                       onPressed: _busy ? null : _doSignIn,
                       child: _busy
@@ -223,6 +303,8 @@ class _SignInScreenState extends State<SignInScreen> {
                           : const Text('Entrar'),
                     ),
                     const SizedBox(height: 8),
+
+                    // Botão secundário: autenticacão com Google
                     OutlinedButton.icon(
                       onPressed: _busy ? null : _doGoogle,
                       icon: const Icon(Icons.g_mobiledata, size: 28),

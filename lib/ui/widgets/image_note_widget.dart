@@ -3,14 +3,25 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../models/annotations.dart';
 
-/// Image note with corner-drag resize (uniform scale) and rotation handle.
-///
-/// Interaction model:
-/// - Tap to select/deselect.
-/// - Drag the image to move it.
-/// - When selected, four corner handles appear: drag any to uniformly scale the image
-///   relative to its center (similar to Word's corner handles).
-/// - A rotation handle appears above the top-center; drag it to rotate freely.
+/*
+  image_note_widget.dart
+
+  Propósito geral:
+  - Widget que exibe uma imagem (ImageNote) sobre o ecrã com suporte a:
+    - mover (drag),
+    - redimensionar uniformemente através de handles nos cantos (corner-drag),
+    - rodar livremente através de um handle de rotação.
+  - Quando está selecionado, mostra controlos de UI (borda, handles e botão
+    de apagar) que acompanham a rotação e o scale da imagem.
+
+  Organização do ficheiro:
+  - Estado: posição centro, dimensões, rotação e flags de seleção.
+  - Gestos: handlers para arrastar a imagem, para iniciar/atualizar/terminar
+    redimensionamento por corner-drag e para a rotação.
+  - Build: constrói uma árvore posicionada com a imagem rotacionada, uma
+    camada de seleção que acompanha a rotação e handles interativos.
+*/
+
 class ImageNoteWidget extends StatefulWidget {
   const ImageNoteWidget({
     super.key,
@@ -30,29 +41,37 @@ class ImageNoteWidget extends StatefulWidget {
 }
 
 class _ImageNoteWidgetState extends State<ImageNoteWidget> {
+  // Estado principal do widget:
+  // - _pos: centro da imagem no canvas (coordenadas locais do canvas)
+  // - _w/_h: largura e altura atuais (podem mudar durante corner-drag)
+  // - _rotation: ângulo em radians
+  // - _selected: se o widget está selecionado (controlos visíveis)
   late Offset _pos; // center
   late double _w;
   late double _h;
   double _rotation = 0.0;
   bool _selected = false;
 
-  // used during gestures
+  // Variáveis usadas durante as interações (gestures):
+  // - _startW/_startH/_startRotation: snapshot do estado quando a gesture começa
+  // - _handleStartDist: distância inicial do handle ao centro para cálculo de scale
+  // - _centerGlobal: centro global do widget (usado para cálculos de rotação/scale)
   late double _startW;
   late double _startH;
   late double _startRotation;
-  late double _handleStartDist; // for corner-drag scaling
+  late double _handleStartDist;
   late Offset _centerGlobal;
 
+  // Constantes/tamanhos de UI
   static const double _minSize = 24.0;
-  // touch target size for handles (larger hitbox)
   static const double _handleTouchSize = 56.0;
-  // visible handle size (smaller circle inside the touch area)
   static const double _handleVisualSize = 16.0;
   static const double _rotateHandleDistance = 30.0;
 
   @override
   void initState() {
     super.initState();
+    // Inicializar o estado a partir do modelo recebido.
     _pos = widget.note.position;
     _w = widget.note.width;
     _h = widget.note.height;
@@ -68,27 +87,29 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
     if (oldWidget.note.rotation != widget.note.rotation) _rotation = widget.note.rotation;
   }
 
-  // no-op start for drag (we only track deltas in update)
 
   void _onDragUpdate(DragUpdateDetails details) {
+    // Atualiza a posição centro respeitando os limites do canvas
     final nx = (_pos.dx + details.delta.dx).clamp(0, widget.canvasSize.width);
     final ny = (_pos.dy + details.delta.dy).clamp(0, widget.canvasSize.height);
     setState(() => _pos = Offset(nx.toDouble(), ny.toDouble()));
   }
 
   void _onDragEnd(DragEndDetails details) {
+    // Ao terminar o drag, avisar o pai que o modelo mudou
     widget.onChanged(widget.note.copyWith(position: _pos, width: _w, height: _h, rotation: _rotation));
   }
 
-  // corner handle: uniform scale based on distance from center
   void _onHandleStart(DragStartDetails details) {
     final rb = context.findRenderObject() as RenderBox?;
     if (rb == null) return;
     _startW = _w;
     _startH = _h;
     _startRotation = _rotation;
-  // account for the vertical offset we added for the rotate handle
-  _centerGlobal = rb.localToGlobal(Offset(_w / 2, _rotateHandleDistance / 2 + _h / 2));
+    // Calcular o centro global do widget (levando em conta o offset vertical
+    // que reservámos para o handle de rotação) — usado para medir distâncias
+    // do corner handle ao centro e assim calcular o scale uniforme.
+    _centerGlobal = rb.localToGlobal(Offset(_w / 2, _rotateHandleDistance / 2 + _h / 2));
     _handleStartDist = (details.globalPosition - _centerGlobal).distance;
   }
 
@@ -107,17 +128,18 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
   }
 
   void _onHandleEnd(DragEndDetails details) {
+    // Ao terminar o redimensionamento, informar o pai (persistência/undo)
     widget.onChanged(widget.note.copyWith(width: _w, height: _h, rotation: _rotation));
   }
 
-  // rotation handle
   late double _startAngle;
 
   void _onRotateStart(DragStartDetails details) {
     final rb = context.findRenderObject() as RenderBox?;
     if (rb == null) return;
-  // account for the vertical offset we added for the rotate handle
-  _centerGlobal = rb.localToGlobal(Offset(_w / 2, _rotateHandleDistance / 2 + _h / 2));
+    // Igual que no corner-handle, precisamos do centro global para calcular
+    // o ângulo inicial entre o toque e o centro do widget.
+    _centerGlobal = rb.localToGlobal(Offset(_w / 2, _rotateHandleDistance / 2 + _h / 2));
     _startAngle = math.atan2(details.globalPosition.dy - _centerGlobal.dy, details.globalPosition.dx - _centerGlobal.dx);
     _startRotation = _rotation;
   }
@@ -131,6 +153,7 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
   }
 
   void _onRotateEnd(DragEndDetails details) {
+    // Comunicar alteração de rotação ao pai
     widget.onChanged(widget.note.copyWith(rotation: _rotation));
   }
 
@@ -145,7 +168,6 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
         child: SizedBox(
           width: _handleTouchSize,
           height: _handleTouchSize,
-          // center a smaller visible circle inside a larger hit area
           child: Center(
             child: Container(
               width: _handleVisualSize,
@@ -167,28 +189,28 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
     final pin = 8.0;
     final maxLeft = math.max(0.0, widget.canvasSize.width - _w - pin);
     final maxTop = math.max(0.0, widget.canvasSize.height - _h - pin);
-
-  // delete button sizing: visual size scales with the smaller image side;
-  // touch area is a bit larger than the visual circle for better accessibility.
-  final double minDelete = 24.0;
-  final double maxDelete = 64.0;
-  final double deleteVisual = (math.min(_w, _h) * 0.18).clamp(minDelete, maxDelete);
-  final double deleteTouch = deleteVisual + 8.0; // extra hit area
+    //Tamanhos do botão de apagar em função do tamanjo da imagem.
+    //Aárea de toque é ligeiramente maior para acessibilidade.
+    final double minDelete = 24.0;
+    final double maxDelete = 64.0;
+    final double deleteVisual = (math.min(_w, _h) * 0.18).clamp(minDelete, maxDelete);
+    final double deleteTouch = deleteVisual + 8.0; // extra hit area
 
     return Positioned(
       left: (_pos.dx - _w / 2).clamp(0, maxLeft),
       top: (_pos.dy - _h / 2).clamp(0, maxTop),
       width: _w,
-      height: _h + _rotateHandleDistance, // leave space for rotate handle
+      height: _h + _rotateHandleDistance,
       child: GestureDetector(
-        onTap: () => setState(() => _selected = !_selected),
-  onPanStart: (_) {},
+    // Tap alterna a seleção (mostra/esconde handles). onPanStart vazio é
+    // mantido porque o GestureDetector principal usa onPanUpdate/onPanEnd.
+    onTap: () => setState(() => _selected = !_selected),
+    onPanStart: (_) {},
         onPanUpdate: _onDragUpdate,
         onPanEnd: _onDragEnd,
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            // rotated image centered in top-left of this box
             Positioned(
               left: 0,
               top: _rotateHandleDistance / 2,
@@ -212,11 +234,8 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                 ),
               ),
             ),
-
-            // selection border is drawn inside the rotated stack below so it follows the image rotation
-
-            // corner handles (inside rotated space visually) - use Align inside positioned image
             if (_selected)
+            //Camada de seleção com handles e botão de apagar.
               Positioned(
                 left: 0,
                 top: _rotateHandleDistance / 2,
@@ -228,7 +247,6 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                   child: Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      // border that rotates with the image
                       Positioned.fill(
                         child: IgnorePointer(
                           child: Container(
@@ -239,7 +257,6 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                           ),
                         ),
                       ),
-                      // delete button placed inside rotated area so it follows rotation
                       if (widget.onDelete != null)
                         Positioned(
                           right: 6,
@@ -270,34 +287,29 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                             ),
                           ),
                         ),
-                      // top-left
+                        //Handles de redimensionamento
                       Positioned(
                         left: -_handleTouchSize / 2,
                         top: -_handleTouchSize / 2,
                         child: _buildHandle(Alignment.topLeft),
                       ),
-                      // top-right
                       Positioned(
                         right: -_handleTouchSize / 2,
                         top: -_handleTouchSize / 2,
                         child: _buildHandle(Alignment.topRight),
                       ),
-                      // bottom-right
                       Positioned(
                         right: -_handleTouchSize / 2,
                         bottom: -_handleTouchSize / 2,
                         child: _buildHandle(Alignment.bottomRight),
                       ),
-                      // bottom-left
                       Positioned(
                         left: -_handleTouchSize / 2,
                         bottom: -_handleTouchSize / 2,
                         child: _buildHandle(Alignment.bottomLeft),
                       ),
-                      // rotate handle (above top-center) placed inside the rotated area so it follows rotation
                       Positioned(
                         left: (_w / 2) - (_handleTouchSize / 2),
-                        // place the rotate handle so its full visual circle is visible
                         top: -(_handleTouchSize / 2) - 4,
                         child: GestureDetector(
                           onPanStart: _onRotateStart,
@@ -325,10 +337,6 @@ class _ImageNoteWidgetState extends State<ImageNoteWidget> {
                   ),
                 ),
               ),
-
-            // rotate handle removed from outer layer — it's now inside the rotated stack so it follows rotation
-
-            // (old non-rotating delete FAB removed — delete is now inside the rotated area)
           ],
         ),
       ),

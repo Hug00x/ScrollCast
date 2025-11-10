@@ -3,9 +3,32 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import '../../models/annotations.dart';
 
+/*
+  audio_pin_layer.dart
+
+  Propósito geral:
+  - Camada que desenha "pins" de áudio sobre uma página (por exemplo, num notebook).
+  - Cada pin representa um `AudioNote` posicionado localmente; ao tocar num pin
+    abre-se um HUD flutuante (Overlay) com controles de reprodução e ações (apagar/fechar).
+  - A camada gere a criação/removal desses Overlays e delega movimento/apagar
+    para callbacks fornecidos pelo pai (onMove, onDelete).
+
+  Organização do ficheiro:
+  - `AudioPinLayer` usa um `LayoutBuilder` para transformar as posições dos
+    notes em rects locais e constrói um `_AudioPin` por nota.
+  - `_AudioPin` é um widget stacking posicionado que lida com toques e drag para
+    mover o pin. Quando tocado, converte a rect local para global e pede à
+    camada para abrir o HUD (`_toggleHud`).
+  - `_AudioHudFloating` é o overlay flutuante com um player (`just_audio`) que
+    suporta play/pause, slider de posição e deletar. Está confinado aos
+    `allowedBounds` quando fornecido.
+*/
+
+
 typedef AudioMoveCallback = Future<void> Function(int index, Offset newPos);
 typedef AudioDeleteCallback = Future<void> Function(int index);
 
+// Layer principal que contém vários pins de áudio.
 class AudioPinLayer extends StatefulWidget {
   const AudioPinLayer({
     super.key,
@@ -14,27 +37,35 @@ class AudioPinLayer extends StatefulWidget {
     required this.onDelete,
     required this.scale,
     required this.overlay,
-    required this.allowedBounds, // ⬅️ NOVO
+    required this.allowedBounds,
   });
 
+  // Lista de notas de áudio a renderizar (posições locais relativas à camada)
   final List<AudioNote> notes;
+  // Callback para mover uma nota (index, nova posição local)
   final AudioMoveCallback onMove;
+  // Callback para apagar uma nota
   final AudioDeleteCallback onDelete;
+  // Escala atual do layer (usado para ajustar deltas de arraste)
   final double scale;
+  // Overlay onde os HUDs flutuantes serão inseridos
   final OverlayState overlay;
 
-  /// Área global (tela) onde a HUD pode existir (a “caixa do papel”).
-  final Rect? allowedBounds; // ⬅️ NOVO
+  /// Área globalonde a HUD pode existir (a "caixa do papel").
+  /// Se null, usa todo o overlay como área disponível.
+  final Rect? allowedBounds;
 
   @override
   State<AudioPinLayer> createState() => _AudioPinLayerState();
 }
 
 class _AudioPinLayerState extends State<AudioPinLayer> {
+  // Mapa de overlay entries activos por índice de nota
   final _entries = <int, OverlayEntry>{};
 
   @override
   void dispose() {
+    // Remover todos os overlays ao destruir a camada
     for (final e in _entries.values) {
       e.remove();
     }
@@ -42,6 +73,8 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
     super.dispose();
   }
 
+  // Alterna o HUD (mostra/fecha) para a nota 'i'. Recebe o rect do pin em
+  // coordenadas globais para posicionar o overlay corretamente.
   void _toggleHud(int i, Rect pinRectGlobal) {
     if (_entries.containsKey(i)) {
       _entries[i]!.remove();
@@ -53,7 +86,7 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
     final entry = OverlayEntry(
       builder: (ctx) => _AudioHudFloating(
         anchorGlobal: pinRectGlobal,
-        allowedBounds: widget.allowedBounds, // ⬅️ NOVO
+        allowedBounds: widget.allowedBounds,
         onClose: () {
           _entries[i]?.remove();
           _entries.remove(i);
@@ -82,6 +115,7 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
       builder: (_, constraints) {
         final size = Size(constraints.maxWidth, constraints.maxHeight);
 
+        // Constrói um rect local centrado na posição fornecida pela nota
         Rect pinRect(Offset p) {
           const double s = 32;
           final left = (p.dx - s / 2).clamp(0, size.width - s);
@@ -96,7 +130,8 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
                 note: widget.notes[i],
                 scale: widget.scale,
                 localPinRect: pinRect(widget.notes[i].position),
-                onTapGlobalRect: (globalRect) => _toggleHud(i, globalRect), // ⬅️ muda
+                // passa rect global para que o overlay saiba onde ancorar-se
+                onTapGlobalRect: (globalRect) => _toggleHud(i, globalRect),
                 onMove: (pos) => widget.onMove(i, pos),
               ),
           ],
@@ -106,6 +141,7 @@ class _AudioPinLayerState extends State<AudioPinLayer> {
   }
 }
 
+// Widget individual que representa um pin de áudio posicionado.
 class _AudioPin extends StatefulWidget {
   const _AudioPin({
     required this.note,
@@ -117,8 +153,10 @@ class _AudioPin extends StatefulWidget {
 
   final AudioNote note;
   final double scale;
-  final Rect localPinRect; // rect relativo a este layer
-  final ValueChanged<Rect> onTapGlobalRect; // ⬅️ agora envia GLOBAL rect
+  // Rect relativo a este layer que envolve o pin (usado para posicionar/ancorar)
+  final Rect localPinRect;
+  // Ao tocar, o pin converte o rect local para coordenadas globais e chama isto
+  final ValueChanged<Rect> onTapGlobalRect;
   final ValueChanged<Offset> onMove;
 
   @override
@@ -131,12 +169,13 @@ class _AudioPinState extends State<_AudioPin> {
   @override
   void initState() {
     super.initState();
-    _pos = widget.note.position;
+    _pos = widget.note.position; // posição inicial baseada no modelo
   }
 
   @override
   void didUpdateWidget(covariant _AudioPin oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Sincronizar posição local se o modelo mudou externamente
     if (oldWidget.note.position != widget.note.position) {
       _pos = widget.note.position;
     }
@@ -153,7 +192,7 @@ class _AudioPinState extends State<_AudioPin> {
       child: GestureDetector(
         behavior: HitTestBehavior.deferToChild,
         onTap: () {
-          // converte rect local -> global
+          // converte rect local -> global para que o HUD se possa ancorar corretamente
           final rb = context.findRenderObject() as RenderBox?;
           if (rb != null) {
             final origin = rb.localToGlobal(Offset.zero);
@@ -161,6 +200,7 @@ class _AudioPinState extends State<_AudioPin> {
           }
         },
         onPanUpdate: (d) {
+          // ajustar delta pelo scale do layer para movimentos consistentes
           final delta = d.delta / widget.scale;
           _pos = Offset(_pos.dx + delta.dx, _pos.dy + delta.dy);
           widget.onMove(_pos);
@@ -194,11 +234,12 @@ class _AudioPinState extends State<_AudioPin> {
   }
 }
 
-/// HUD flutuante em Overlay (confinada ao papel).
+/// HUD flutuante em Overlay.
+/// Responsável por mostrar controlos do ficheiro de áudio.
 class _AudioHudFloating extends StatefulWidget {
   const _AudioHudFloating({
     required this.anchorGlobal,
-    required this.allowedBounds, // ⬅️ NOVO
+    required this.allowedBounds,
     required this.onClose,
     required this.onDelete,
     required this.filePath,
@@ -206,8 +247,10 @@ class _AudioHudFloating extends StatefulWidget {
     required this.onRelayout,
   });
 
-  final Rect anchorGlobal;     // onde está o pin (global)
-  final Rect? allowedBounds;   // caixa do papel (global)
+  // Rect global do pin que ancorará o HUD
+  final Rect anchorGlobal;
+  // Limites globais onde a HUD pode existir; se null usa todo o overlay
+  final Rect? allowedBounds;
   final VoidCallback onClose;
   final Future<void> Function() onDelete;
   final String filePath;
@@ -235,6 +278,7 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
   @override
   void initState() {
     super.initState();
+    // Sugerir posição inicial baseada no anchor e nos bounds
     _topLeft = _suggestPos(widget.anchorGlobal);
     _init();
   }
@@ -242,12 +286,14 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
   @override
   void didUpdateWidget(covariant _AudioHudFloating oldWidget) {
     super.didUpdateWidget(oldWidget);
+    // Recalcular posição se o anchor ou os limites mudarem
     if (oldWidget.anchorGlobal != widget.anchorGlobal ||
         oldWidget.allowedBounds != widget.allowedBounds) {
       _topLeft = _suggestPos(widget.anchorGlobal);
     }
   }
 
+  // Sugere uma posição para o HUD: tenta acima do pin, caso não caiba tenta abaixo.
   Offset _suggestPos(Rect anchorGlobal) {
     // limites: se não houver bounds, usa overlay inteiro
     final overlayBox = Overlay.of(context).context.findRenderObject() as RenderBox;
@@ -268,11 +314,13 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
     );
   }
 
+  // Inicializa o player e subscreve streams de posição/estado
   Future<void> _init() async {
     try {
       await _player.setFilePath(widget.filePath);
       _dur = _player.duration ?? Duration(milliseconds: widget.durationMsHint);
     } catch (_) {
+      // fallback para a duração de hint fornecida
       _dur = Duration(milliseconds: widget.durationMsHint);
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -308,6 +356,7 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
 
   @override
   Widget build(BuildContext context) {
+    // Calcula bounds efetivos com base no overlay e allowedBounds
     final overlayBox = Overlay.of(context).context.findRenderObject() as RenderBox;
     final overlaySize = overlayBox.size;
     final Rect bounds = widget.allowedBounds ??
@@ -318,6 +367,7 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
       top: _topLeft.dy,
       width: _w,
       child: GestureDetector(
+        // Permite arrastar o HUD dentro dos limites calculados
         onPanUpdate: (d) {
           final nx = (_topLeft.dx + d.delta.dx)
               .clamp(bounds.left + 8, bounds.right - _w - 8);
@@ -340,6 +390,7 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
                 : Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      // Cabeçalho do HUD: ícone, título e ações (apagar/fechar)
                       Row(
                         children: [
                           const Icon(Icons.mic_rounded, size: 18),
@@ -364,6 +415,7 @@ class _AudioHudFloatingState extends State<_AudioHudFloating> {
                           ),
                         ],
                       ),
+                      // Controlos de reprodução: play/pause e slider de posição
                       Row(
                         children: [
                           IconButton.filled(

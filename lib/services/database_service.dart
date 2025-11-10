@@ -20,7 +20,7 @@ abstract class DatabaseService {
   Future<bool> isFavorite(String pdfId);
   Future<List<PdfDocumentModel>> listFavorites({String? query});
 
-  /// 🔔 Emite um evento sempre que a lista de favoritos muda
+  // Emite um evento sempre que a lista de favoritos muda
   Stream<void> favoritesEvents();
 
   // ===== Cadernos (Notebooks) =====
@@ -40,7 +40,6 @@ abstract class DatabaseService {
   Future<List<PageAnnotations>> getAllNotebookPages(String notebookId);
   Future<void> deleteNotebookPages(String notebookId, {int? pageIndex});
 
-  /// 👉 Chamar SEMPRE após mudar de conta (UID mudou)
-  /// Fecha boxes do UID anterior para evitar “bleed” de dados na UI.
+  // Fecha boxes do UID anterior para evitar mistura dedados na UI.
   Future<void> onAccountSwitched();
 }

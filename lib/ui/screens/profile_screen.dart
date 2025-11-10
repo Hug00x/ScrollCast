@@ -1,14 +1,26 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-// 'painting' not needed: material.dart already exports what's used here
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:hive/hive.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'onboarding_start_screen.dart';
-
 import '../../main.dart';
+
+/*
+  Perfil (profile_screen.dart)
+
+  Visão geral:
+  - Este ficheiro contém o ecrã de Perfil da aplicação. Aqui o utilizador pode ver e gerir a sessão ativa,
+    trocar entre contas já usadas no dispositivo, alterar/remover avatar local (para contas email/password),
+    e aceder a opções de ajuda e ações destrutivas (apagar conta, apagar dados do convidado).
+
+  Propósito:
+  - Centralizar toda a lógica relacionada com contas conhecidas neste dispositivo, incluindo
+    persistência simples em Hive (box `known_accounts`).
+  - Fornecer diálogos e fluxos de reautenticação quando necessário (por exemplo ao apagar conta).
+*/
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -18,6 +30,9 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
+  // === Estado local / boxes ===
+  // _box: Hive box que guarda metadados das contas já usadas neste dispositivo.
+  // _accounts: lista em memória de contas conhecidas, usada para apresentar opções ao utilizador.
   static const _boxName = 'known_accounts';
   Box? _box;
   List<_KnownAccount> _accounts = [];
@@ -26,6 +41,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
+    // Inicializa a lista de contas conhecidas e subscreve alterações na autenticação
+    // para manter a UI sincronizada quando o estado do utilizador muda.
     _initAccounts();
     _authSub = FirebaseAuth.instance.userChanges().listen((_) {
       _initAccounts();
@@ -40,8 +57,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _initAccounts() async {
+    // Abre a `known_accounts` box do Hive.
     _box = Hive.isBoxOpen(_boxName) ? Hive.box(_boxName) : await Hive.openBox(_boxName);
 
+    // Se houver um utilizador autenticado, garante que existe uma entrada na box
+    // com o UID atual (mantendo o caminho do avatar local se já existia).
     final u = FirebaseAuth.instance.currentUser;
     if (u != null) {
       final prev = _box!.get(u.uid);
@@ -51,11 +71,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final ka = _KnownAccount.fromUser(u).copyWith(localAvatarPath: existingPath);
       await _box!.put(ka.uid, ka.toMap());
     }
-
+    // Carrega todas as contas para memória.
     _loadAccounts();
   }
 
   void _loadAccounts() {
+    // Constrói a lista de `_KnownAccount` a partir da box e ordena para que a
+    // conta atual (se existir) apareça primeiro. Caso contrário ordena por último uso.
     if (_box == null) return;
     final items = <_KnownAccount>[];
     for (final k in _box!.keys) {
@@ -74,9 +96,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _afterAuthIdentityChange({String goTo = OnboardingStartScreen.route}) async {
-    // Não fechamos o Hive aqui porque outras partes da app podem ainda estar a
-    // aceder a boxes durante a transição de ecrã, o que causava "HiveError: Box has already been closed".
-    // O Hive deve ser fechado quando a app realmente termina; aqui apenas limpamos caches visuais.
+    // Limpa caches gráficos para evitar que avatares antigos fiquem em cache
+    // após uma mudança de conta e depois navega para o ecrã indicado (Onboarding).
     try {
       PaintingBinding.instance.imageCache.clear();
       PaintingBinding.instance.imageCache.clearLiveImages();
@@ -86,6 +107,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _showErrorDialog(String message, {String title = 'Erro'}) async {
+    // Apresenta um AlertDialog simples com uma mensagem de erro.
     if (!mounted) return;
     await showDialog<void>(
       context: context,
@@ -100,25 +122,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _switchToAccount(_KnownAccount acc) async {
+    // Troca a sessão para a conta selecionada.
+    // Suporta contas Google (login automático) e Email/Password (pede password).
     final auth = FirebaseAuth.instance;
-    final prevUid = auth.currentUser?.uid; // UID antes da tentativa
+    final prevUid = auth.currentUser?.uid;
     if (prevUid == acc.uid) return;
 
     try {
       if (acc.isGoogle) {
+        // Inicia fluxo Google.
         await ServiceLocator.instance.auth.signInWithGoogle();
       } else {
+        // Pede password ao utilizador e efetua signIn com email.
         final pass = await _askPassword(context, acc.email ?? '');
         if (pass == null) return;
         await ServiceLocator.instance.auth.signInWithEmail(acc.email!, pass);
       }
 
-      // Verifica se a identidade realmente mudou
+      // Verifica se a troca de UID ocorreu.
       final newUid = FirebaseAuth.instance.currentUser?.uid;
       final success = newUid != null && newUid != prevUid;
 
       if (!success) {
-        // Falhou (ex.: password errada mas sem exceção)
+        // Apresenta feedback consoante o tipo de conta.
         if (!acc.isGoogle) {
           await _showErrorDialog(
             'Password incorreta.',
@@ -127,10 +153,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         } else {
           _snack('Não foi possível entrar com Google.');
         }
-        return; // ← mantém-se na ProfileScreen
+        return;
       }
 
-      // Sucesso → atualizar box e reiniciar app state
+      // Se a troca ocorreu, atualiza a entrada na box com metadados mais recentes.
       final u = auth.currentUser!;
       if (_box != null) {
         final prev = _box!.get(u.uid);
@@ -141,14 +167,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
         await _box!.put(ka.uid, ka.toMap());
       }
 
-      await _afterAuthIdentityChange(goTo: '/'); // ← vai para a Library
+      // Navega para a raiz da app depois de trocar de conta.
+      await _afterAuthIdentityChange(goTo: '/');
     } on FirebaseAuthException catch (e) {
-      // Erros típicos de credenciais
+      // Tratamento de erros específicos do Firebase (ex.: password errada).
       final code = e.code;
       if (!acc.isGoogle &&
           (code == 'wrong-password' || code == 'invalid-credential' || code == 'user-not-found')) {
         await _showErrorDialog('Password incorreta.', title: 'Autenticação falhou');
-        return; // ← mantém-se na ProfileScreen
+        return; // mantém-se na ProfileScreen.
       } else {
         _snack('Falha ao trocar para ${acc.email ?? acc.displayName}: ${e.message ?? e.code}');
       }
@@ -158,6 +185,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _deleteCurrentAccount() async {
+    // Apaga a conta atualmente autenticada.
+    // - Pede confirmação textual ao utilizador.
     final auth = FirebaseAuth.instance;
     final u = auth.currentUser;
     if (u == null) return;
@@ -171,6 +200,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _snack('Conta apagada.');
       await _afterAuthIdentityChange(goTo: OnboardingStartScreen.route);
     } on FirebaseAuthException catch (e) {
+      // Alguns endpoints exigem reautenticação recente. Neste caso tentamos reautenticar.
       if (e.code == 'requires-recent-login') {
         final success = await _reauthenticateFlow(u);
         if (success) {
@@ -192,6 +222,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<bool> _reauthenticateFlow(User u) async {
+    // Faz o fluxo de reautenticação necessário para operações sensíveis (como apagar conta).
+    // Para contas Google tenta o sign-in Google; para Email/Password pede a password novamente.
     final isGoogle = u.providerData.any((p) => p.providerId == 'google.com');
     try {
       if (isGoogle) {
@@ -213,10 +245,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // ================== Avatar local (email/password) ==================
 
   Future<void> _changeAvatar() async {
+    // Permite ao utilizador escolher uma imagem local para usar como avatar (apenas para contas email/password).
     final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (user == null) return; //contas Convidado não têm avatar.
     final isGoogle = user.providerData.any((p) => p.providerId == 'google.com');
-    if (isGoogle) return;
+    if (isGoogle) return; // contas Google usam a foto remota.
 
     final picker = ImagePicker();
     final xfile = await picker.pickImage(source: ImageSource.gallery, imageQuality: 92);
@@ -227,6 +260,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final avatarsDir = Directory(p.join(root, 'avatars'));
     await avatarsDir.create(recursive: true);
 
+    // Remove avatares antigos deste UID para evitar acumulação.
     await _deleteAllAvatarsFor(uid);
 
     final ts = DateTime.now().millisecondsSinceEpoch;
@@ -235,6 +269,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
     await ServiceLocator.instance.storage.copyFile(xfile.path, destPath);
 
+    // Atualiza a entrada local na box com o caminho do avatar recém-copiado.
     if (_box != null) {
       final prev = _box!.get(uid);
       final m = prev is Map ? Map<String, dynamic>.from(prev) : <String, dynamic>{};
@@ -249,6 +284,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _loadAccounts();
     }
 
+    // Evict cache para garantir que a nova imagem é renderizada.
     try {
       PaintingBinding.instance.imageCache.evict(FileImage(File(destPath)));
       PaintingBinding.instance.imageCache.clearLiveImages();
@@ -258,6 +294,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _removeAvatar() async {
+    // Remove o avatar local.
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
     final isGoogle = user.providerData.any((p) => p.providerId == 'google.com');
@@ -282,6 +319,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _deleteAllAvatarsFor(String uid) async {
+    // Apaga todos os ficheiros de avatar que pertencem ao UID fornecido.
     final root = await ServiceLocator.instance.storage.appRoot();
     final dir = Directory(p.join(root, 'avatars'));
     if (!await dir.exists()) return;
@@ -300,11 +338,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // =================== Dialogs/UX ===================
+  // =================== Dialogos/UX ===================
 
   Future<String?> _askPassword(BuildContext ctx, String email,
       {String title = 'Introduz a password'}) async {
     final c = TextEditingController();
+    // Mostra um diálogo que pede a password do utilizador. Retorna a string
+    // introduzida ou null se o utilizador cancelar.
     return showDialog<String>(
       context: ctx,
       builder: (dctx) {
@@ -348,6 +388,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<bool?> _confirmDelete(BuildContext ctx) async {
+    // Diálogo de confirmação que pede ao utilizador que escreva "confirmar"
+    // para evitar eliminações acidentais.
     final t = TextEditingController();
   bool matches(String s) => s.trim().toLowerCase() == 'confirmar';
 
@@ -388,6 +430,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<bool?> _confirmClearData(BuildContext ctx) async {
+    // Diálogo idêntico a _confirmDelete mas usado para apagar dados do convidado.
     final t = TextEditingController();
   bool matches(String s) => s.trim().toLowerCase() == 'confirmar';
 
@@ -428,6 +471,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   void _snack(String msg) {
+    // Mostra uma Snackbar com a mensagem fornecida.
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
@@ -436,6 +480,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _openHelp() async {
     final cs = Theme.of(context).colorScheme;
+    // Abre um sheet detalhado de Ajuda mostrando secções e linhas explicativas.
     await showModalBottomSheet<void>(
       context: context,
       useSafeArea: true,
@@ -449,7 +494,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
           minChildSize: 0.5,
           maxChildSize: 0.95,
           builder: (_, controller) {
-            // local styles unused — rely on direct Theme lookups in widgets below
             return Padding(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
               child: ListView(
@@ -489,8 +533,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     icon: Icons.brush_rounded,
                     title: 'Anotações (PDFs e Cadernos)',
                     children: [
-                      _HelpRow(Icons.pan_tool_alt, 'Modo mão / Arrastar & Zoom',
-                          'Arrasta e faz zoom ao documento. Se uma caneta for detetada, os dedos servem para arrastar/zoom e a caneta desenha.'),
+                      _HelpRow(Icons.pan_tool_alt, 'Modo Mão',
+                          'Arrasta e faz zoom ao documento.'),
+                           _HelpRow(Icons.brush_rounded, 'Modo Desenho',
+                          'Usa o dedo para desenhar livremente.'),
+                      _HelpRow(Icons.create_rounded, 'Modo Caneta',
+                          'Se uma caneta for detetada, os dedos servem para arrastar/zoom e a caneta desenha.'),
                       _HelpRow(Icons.auto_fix_off_rounded,'Borracha',
                           'Apaga segmentos do traço ao passar por cima. O tamanho da borracha é configurável.'),
                       _HelpRow(Icons.sticky_note_2_outlined, 'Notas de texto',
@@ -520,20 +568,28 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Estrutura geral:
+    //  - AppBar com título
+    //  - Lista vertical com: avatar, estado da sessão, opções de tema, ajuda,
+    //    ações para avatar (quando aplicável), seleção de conta, terminar sessão e ações destrutivas.
+
     final theme = ServiceLocator.instance.theme;
     final isLight = theme.value == ThemeMode.light;
 
-  final User? current = FirebaseAuth.instance.currentUser;
+    // Estado do utilizador atual (pode ser nulo se não autenticado)
+    final User? current = FirebaseAuth.instance.currentUser;
     final currentUid = current?.uid;
+    // Detecta se a sessão atual é Google
     final isGoogle = current?.providerData.any((p) => p.providerId == 'google.com') ?? false;
+    // Detecta sessão convidado/anonima
     bool isGuest;
     if (current == null) {
       isGuest = true;
     } else {
-      // assign directly; on some SDKs this is non-nullable
       isGuest = current.isAnonymous;
     }
 
+    // Outras contas gravadas localmente (exclui a conta atual)
     final others = _accounts.where((a) => a.uid != currentUid).toList();
 
     return Scaffold(
@@ -541,11 +597,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // Avatar central: mostra a imagem do utilizador ou iniciais; permite alterar quando aplicável.
           Center(child: _ProfileAvatar(accountsBox: _box, onTap: (!isGoogle && !isGuest) ? () => _changeAvatar() : null)),
           const SizedBox(height: 16),
+          // Rótulo que indica qual a sessão ativa
           Center(child: Text('Sessão ativa', style: Theme.of(context).textTheme.labelMedium)),
           const SizedBox(height: 24),
 
+          // Switch para alternar entre tema claro/escuro — atualiza a app inteira.
           SwitchListTile(
             title: const Text('Tema claro'),
             value: isLight,
@@ -553,6 +612,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             secondary: const Icon(Icons.brightness_6_rounded),
           ),
 
+          // Acesso à ajuda/guia rápido.
           ListTile(
             leading: const Icon(Icons.help_outline_rounded),
             title: const Text('Ajuda'),
@@ -560,6 +620,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
             onTap: _openHelp,
           ),
 
+          // Se a conta não é Google nem Guest, mostramos ações locais de avatar (alterar / remover).
           if (!isGoogle && !isGuest) ...[
             const Divider(),
             ListTile(
@@ -576,6 +637,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           const Divider(),
 
+          // Trocar de conta: abre um bottom sheet com as contas guardadas. A seleção troca sessão.
           ListTile(
             leading: const Icon(Icons.swap_horiz_rounded),
             title: const Text('Trocar de conta'),
@@ -615,6 +677,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   },
           ),
 
+          // Terminar sessão: desloga e navega para o ecrã de onboarding/entrada.
           ListTile(
             leading: const Icon(Icons.logout_rounded),
             title: const Text('Terminar sessão'),
@@ -626,6 +689,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
           const Divider(),
 
+          // Ações destrutivas: apagar dados do convidado ou apagar conta permanentemente.
           if (isGuest)
             ListTile(
               leading: const Icon(Icons.delete_sweep_rounded),
@@ -685,6 +749,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _snack('Dados do convidado limpos.');
     await _afterAuthIdentityChange(goTo: OnboardingStartScreen.route);
   }
+
+  // =================== Utilitários de UI e modelos locais ===================
+  // A partir daqui estão pequenos widgets auxiliares e a representação local
+  // do modelo de conta (`_KnownAccount`). Estes tipos são usados principalmente
+  // para apresentar listas de contas, avatares e para serializar os metadados guardados na box Hive `known_accounts`.
 }
 
 class _AccountAvatar extends StatelessWidget {
@@ -699,19 +768,20 @@ class _AccountAvatar extends StatelessWidget {
           : null;
       return CircleAvatar(
         radius: 18,
-  backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
+        backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
         foregroundImage: provider,
         child: provider == null ? Text(_initials(a.displayName ?? a.email ?? '')) : null,
       );
     }
 
+    // Para contas locais (email/password) procuramos um caminho de avatar.
     final path = a.localAvatarPath;
     final provider = (path != null && File(path).existsSync())
         ? FileImage(File(path))
         : null;
     return CircleAvatar(
       radius: 18,
-  backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
+      backgroundColor: Theme.of(context).colorScheme.primary.withAlpha((.2 * 255).round()),
       foregroundImage: provider,
       child: provider == null ? Text(_initials(a.displayName ?? a.email ?? '')) : null,
     );
@@ -743,6 +813,10 @@ class _ProfileAvatar extends StatelessWidget {
         if (user == null) {
           return const CircleAvatar(radius: 44, child: Icon(Icons.person));
         }
+        // Constrói o avatar principal mostrado no ecrã de perfil.
+        // - Para contas Google usamos a foto remota (se disponível).
+        // - Para contas locais procuramos um `localAvatarPath` na box `known_accounts`.
+        // - Em ausência de imagem mostramos as iniciais.
         final isGoogle = user.providerData.any((p) => p.providerId == 'google.com');
         if (isGoogle) {
           final url = user.photoURL;
@@ -753,10 +827,10 @@ class _ProfileAvatar extends StatelessWidget {
             foregroundImage: provider,
             child: provider == null ? Text(_initials(user.displayName ?? user.email ?? '')) : null,
           );
-          // Google avatars are not editable here
           return avatar;
         }
 
+        // Se existe uma entrada local na box com um caminho para avatar, usa-o.
         String? path;
         final map = accountsBox?.get(user.uid);
         if (map is Map && map['localAvatarPath'] is String) {
@@ -771,7 +845,7 @@ class _ProfileAvatar extends StatelessWidget {
           foregroundImage: provider,
           child: provider == null ? Text(_initials(user.displayName ?? user.email ?? '')) : null,
         );
-        // If an onTap callback is provided (email/password accounts), make the avatar tappable
+        // Se for possível alterar avatar, tornamos o widget clicável.
         if (onTap != null) {
           return GestureDetector(onTap: onTap, child: avatar);
         }
@@ -840,6 +914,7 @@ class _KnownAccount {
         lastUsed: DateTime.now(),
       );
 
+  // Serialização para armazenamento na `Hive` box `known_accounts`.
   Map<String, dynamic> toMap() => {
         'uid': uid,
         'email': email,
@@ -872,12 +947,15 @@ class _HelpSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    // Painel estilizado usado no sheet de Ajuda; encapsula um ExpansionTile
+    // com um background levemente destacado para separar secções visuais.
     return Container(
       decoration: BoxDecoration(
-  color: cs.surfaceContainerHighest.withAlpha((0.35 * 255).round()),
+        color: cs.surfaceContainerHighest.withAlpha((0.35 * 255).round()),
         borderRadius: BorderRadius.circular(12),
       ),
       child: ExpansionTile(
+        // Expandido por omissão para que o utilizador veja o conteúdo rapidamente.
         initiallyExpanded: true,
         leading: Icon(icon, color: cs.primary),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
@@ -902,6 +980,7 @@ class _HelpRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Ícone de secção e texto descritivo.
           Icon(icon, size: 20, color: cs.primary),
           const SizedBox(width: 10),
           Expanded(

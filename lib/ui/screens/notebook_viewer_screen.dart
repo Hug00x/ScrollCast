@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:math' as math;
-
 import 'package:path/path.dart' as p;
 import 'package:image_picker/image_picker.dart';
-// MatrixUtils is available through material.dart; explicit import removed to silence analyzer
 import '../../main.dart';
 import '../../models/annotations.dart';
 import '../widgets/drawing_canvas.dart';
@@ -14,12 +12,31 @@ import '../widgets/audio_pin_layer.dart';
 import '../widgets/text_note_bubble.dart';
 import '../widgets/image_note_widget.dart';
 
+/*
+  Notebook viewer screen
+
+  Propósito geral:
+  - Fornece a interface para visualizar e editar páginas de um caderno interno (notebook) do ScrollCast.
+  - Gere a navegação entre páginas, carregamento/gravação de anotações (strokes, notas de texto, áudio e imagens),
+    além das ações do utilizador como adicionar/remover páginas, desfazer/refazer, e importar imagens.
+  - Persiste metadados do caderno (última página aberta, contagem de páginas) através do serviço de base de dados.
+
+  Organização do ficheiro:
+  - `NotebookViewerArgs`: argumentos simples para abrir o ecrã.
+  - `NotebookViewerScreen`: widget de estado que controla todo o fluxo de leitura/gravação de anotações e UI.
+  - `_NoteBottomSheet`: componente auxiliar para edição rápida de notas de texto.
+*/
+
+// Contém o id do caderno e o nome apresentado na AppBar.
 class NotebookViewerArgs {
   final String notebookId;
   final String name;
   const NotebookViewerArgs({required this.notebookId, required this.name});
 }
 
+// Tela principal do visualizador de cadernos.
+// Gerencia estado local da edição (páginas, anotações, notas multimédia) e é responsável pelas
+// chamadas ao serviço de persistência quando a página muda ou quando o ecrã é fechado.
 class NotebookViewerScreen extends StatefulWidget {
   static const route = '/notebook';
   final NotebookViewerArgs args;
@@ -52,30 +69,30 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   double _currentScale = 1.0;
   bool _handMode = false;
 
-  // ===== Stylus =====
   bool _stylusDown = false;
   bool _stylusEverSeen = false;
 
-  // painel inferior de nota
   int? _openedNoteIndex;
   final _noteEditor = TextEditingController();
 
-  // limites para o HUD de áudio
   final GlobalKey _paperKey = GlobalKey();
   Rect? _paperRect;
 
   String get _nbId => 'NB_${widget.args.notebookId}';
 
+  // Inicialização do State: chama o carregamento assíncrono do caderno.
   @override
   void initState() {
     super.initState();
     _initNotebook();
   }
 
+  // Limpeza de recursos: descarta o controller do editor e grava metadados.
   @override
   void dispose() {
     _noteEditor.dispose();
-    // persist last opened page and timestamp (fire-and-forget)
+
+    // Persistência assíncrona do estado do caderno.
     () async {
       try {
         final db = ServiceLocator.instance.db;
@@ -88,6 +105,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     super.dispose();
   }
 
+  // Carrega metadados do caderno e determina a contagem de páginas.
+  // Se o modelo armazenado divergir da contagem real de páginas, faz um upsert para sincronizar.
   Future<void> _initNotebook() async {
     final db = ServiceLocator.instance.db;
     final existing = await db.getAllAnnotations(_nbId);
@@ -101,7 +120,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       final model = await db.getNotebookById(widget.args.notebookId);
       if (model != null) {
         _pageIndex = model.lastPage.clamp(0, math.max(0, _pageCount - 1)).toInt();
-        // if stored pageCount differs from actual, update the stored model
+
         if (model.pageCount != _pageCount) {
           await db.upsertNotebook(model.copyWith(pageCount: _pageCount, lastOpened: DateTime.now(), lastPage: _pageIndex));
         }
@@ -112,6 +131,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     setState(() {});
   }
 
+  // Carrega as anotações guardadas para a página `i` para as estruturas locais (_strokes, _textNotes, ...)
+  // Também reinicia transformações visuais e recalcula limites do papel.
   Future<void> _loadPage(int i) async {
     final db = ServiceLocator.instance.db;
     final ann = await db.getPageAnnotations(_nbId, i);
@@ -130,7 +151,6 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       ..clear()
       ..addAll(ann?.imageNotes ?? const []);
 
-    // reset enquadramento/UI mas NÃO mexer no _stylusEverSeen
     _ivController.value = Matrix4.identity();
     _currentScale = 1.0;
     _handMode = false;
@@ -142,6 +162,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _updatePaperRect());
   }
 
+  // Persiste as anotações atuais da página ativa no armazenamento.
   Future<void> _savePage() async {
     await ServiceLocator.instance.db.savePageAnnotations(
       PageAnnotations(
@@ -155,14 +176,14 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     );
   }
 
+  // Navega para a página `i`, opcionalmente guardando a página atual antes.
   Future<void> _goTo(int i, {bool saveCurrent = true}) async {
     if (i < 0 || i >= _pageCount || i == _pageIndex) return;
     if (saveCurrent) await _savePage();
     await _loadPage(i);
     setState(() => _pageIndex = i);
   }
-
-  // páginas
+  // Adiciona uma nova página ao final do caderno, guarda a atual e atualiza o modelo persistido.
   Future<void> _addPage() async {
     await _savePage();
     setState(() => _pageCount += 1);
@@ -176,6 +197,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     } catch (_) {}
   }
 
+  // Remove a página atual após confirmação do utilizador.
   Future<void> _removeCurrentPage() async {
     if (_pageCount <= 1) return;
 
@@ -194,12 +216,9 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
 
     final db = ServiceLocator.instance.db;
 
-    // delete the current page from both possible stores (legacy annotations and notebook_pages)
     await db.deleteAnnotations(_nbId, pageIndex: _pageIndex);
     await db.deleteNotebookPages(_nbId, pageIndex: _pageIndex);
 
-    // shift subsequent pages down by one (so indexes remain contiguous)
-    // handle legacy annotations storage
     final remainingAnn = await db.getAllAnnotations(_nbId);
     final toShiftAnn = remainingAnn.where((p) => p.pageIndex > _pageIndex).toList()
       ..sort((a, b) => a.pageIndex.compareTo(b.pageIndex));
@@ -217,7 +236,6 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       await db.savePageAnnotations(shifted);
     }
 
-    // handle notebook_pages storage (newer API)
     final remainingNb = await db.getAllNotebookPages(_nbId);
     final toShiftNb = remainingNb.where((p) => p.pageIndex > _pageIndex).toList()
       ..sort((a, b) => a.pageIndex.compareTo(b.pageIndex));
@@ -237,9 +255,6 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
 
     final nextIndex = _pageIndex.clamp(0, _pageCount - 2);
 
-    // load the next page explicitly (don't rely on _goTo which may early-return
-    // when the requested index equals the current _pageIndex). We also update
-    // _pageIndex after loading so the UI will reflect the new page contents.
     await _loadPage(nextIndex);
     setState(() {
       _pageCount -= 1;
@@ -255,12 +270,13 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     } catch (_) {}
   }
 
-  // undo/redo
+
+  // Aplica o snapshot de 'undo': restaura o último estado salvo e persiste a página.
   Future<void> _onUndo() async {
     if (_undoStack.isEmpty) return;
-    // push current state to redo
+
     _redoStack.add(_cloneStrokes(_strokes));
-    // restore previous
+
     final prev = _undoStack.removeLast();
     setState(() {
       _strokes
@@ -270,9 +286,10 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
   }
 
+  // Aplica o snapshot de 'redo': restaura o próximo estado e persiste a página.
   Future<void> _onRedo() async {
     if (_redoStack.isEmpty) return;
-    // push current state to undo
+
     _undoStack.add(_cloneStrokes(_strokes));
     final next = _redoStack.removeLast();
     setState(() {
@@ -283,17 +300,19 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
   }
 
+  // Utilitários para clonar strokes (usados por undo/redo).
   List<Stroke> _cloneStrokes(List<Stroke> src) => src.map((s) => _cloneStroke(s)).toList();
 
   Stroke _cloneStroke(Stroke s) => Stroke(points: List.of(s.points), width: s.width, color: s.color, mode: s.mode);
 
+  // Regista o estado atual no histórico de undo e limpa a pilha de redo.
   void _pushUndoSnapshot() {
     _undoStack.add(_cloneStrokes(_strokes));
-    // keep redo cleared when user makes a new action
+
     _redoStack.clear();
   }
 
-  // notas
+  // Cria uma nova nota de texto através de um dialog.
   Future<void> _createTextNote() async {
     final controller = TextEditingController();
     final text = await showDialog<String>(
@@ -316,7 +335,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       ),
     );
   if (text == null || text.isEmpty) return;
-  // the dialog awaits; guard against using the State.context if the widget was disposed
+
   if (!mounted) return;
 
   final center = _contentCenter(context);
@@ -324,18 +343,21 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
   }
 
+  // Abre o painel de edição de nota .
   void _openNoteSheet(int index) {
     _openedNoteIndex = index;
     _noteEditor.text = _textNotes[index].text;
     setState(() {});
   }
 
+  // Fecha o painel de edição de nota e limpa o editor.
   void _closeNoteSheet() {
     _openedNoteIndex = null;
     _noteEditor.clear();
     setState(() {});
   }
 
+  // Remove a nota de texto atualmente aberta (se existir) e persiste a página.
   Future<void> _deleteOpenedNote() async {
     if (_openedNoteIndex == null) return;
     final i = _openedNoteIndex!;
@@ -346,6 +368,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
   }
 
+  // Aplica o texto editado à nota aberta e guarda a página.
   Future<void> _applyNoteText(String v) async {
     if (_openedNoteIndex == null) return;
     final i = _openedNoteIndex!;
@@ -354,6 +377,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
   }
 
+  // Importa uma imagem da galeria, copia para o storage da app e a insere como nota de imagem centrada.
   Future<void> _importImage() async {
     final picker = ImagePicker();
     final x = await picker.pickImage(source: ImageSource.gallery);
@@ -363,7 +387,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     final storage = ServiceLocator.instance.storage;
     final root = await storage.appRoot();
     final imagesDir = p.join(root, 'images');
-    // ensure dir exists
+
     try {
       final d = Directory(imagesDir);
       if (!await d.exists()) await d.create(recursive: true);
@@ -379,6 +403,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     await _savePage();
   }
 
+  // Calcula a posição do centro do conteúdo, tendo em conta a transformação atual.
   Offset _contentCenter(BuildContext context) {
     final box = context.findRenderObject() as RenderBox?;
     if (box == null) return const Offset(0, 0);
@@ -388,6 +413,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     return MatrixUtils.transformPoint(inv, center);
   }
 
+  // Atualiza o rect com os limites do papel no ecrã.
   void _updatePaperRect() {
     final ctx = _paperKey.currentContext;
     final rb = ctx?.findRenderObject() as RenderBox?;
@@ -405,15 +431,24 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     final canNext = _pageIndex < _pageCount - 1;
     final sheetOpen = _openedNoteIndex != null;
 
+    // O método build compõe a UI principal do ecrã. A estrutura é:
+    // - AppBar: título e ações rápidas (importar imagem, re-centrar)
+    // - FloatingActionButton (central): gravação de áudio.
+    // - BottomAppBar: navegação entre páginas e ações de gestão (adicionar/remover)
+    // - Corpo: AnnotationToolbar + área do papel.
+    // - NoteBottomSheet: painel inferior para editar notas de texto.
     return Scaffold(
+      // Barra superior com título e ações utilitárias.
       appBar: AppBar(
         title: Text('${widget.args.name} (${_pageIndex + 1}/$_pageCount)'),
         actions: [
+          // Importar uma imagem para inserir como nota de imagem.
           IconButton(
             tooltip: 'Importar imagem',
             onPressed: _importImage,
             icon: const Icon(Icons.image_outlined),
           ),
+          // Repor a transformação do InteractiveViewer para o estado inicial.
           IconButton(
             tooltip: 'Repor enquadramento',
             onPressed: () => setState(() => _ivController.value = Matrix4.identity()),
@@ -422,11 +457,13 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
         ],
       ),
 
+      // Botão de ação flutuante centralizado (usado para gravação de áudio). 
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       floatingActionButton: Builder(
         builder: (ctx) => WhatsAppMicButton(
           provideDirPath: () async => ServiceLocator.instance.storage.audioDir(),
           onSaved: (path, durMs) async {
+            // Ao guardar um áudio, inserimos um AudioNote e persistimos a página.
             final center = _contentCenter(ctx);
             setState(() => _audioNotes.add(AudioNote(position: center, filePath: path, durationMs: durMs)));
             await _savePage();
@@ -434,17 +471,21 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
         ),
       ),
 
+      // Barra inferior: navegação de páginas e ações principais do caderno.
       bottomNavigationBar: BottomAppBar(
         shape: const CircularNotchedRectangle(),
         notchMargin: 10,
         height: 64,
         child: Row(
           children: [
+            // Ir para a página anterior.
             IconButton(
               onPressed: canPrev ? () => _goTo(_pageIndex - 1) : null,
               icon: const Icon(Icons.chevron_left),
               tooltip: 'Anterior',
             ),
+
+            // Alterna o modo mão/desenho (quando a caneta não está presente).
             Tooltip(
               message: _stylusEverSeen
                   ? 'Caneta detetada — os dedos servem para arrastar/zoom'
@@ -461,13 +502,16 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                 icon: Icon(_handMode ? Icons.pan_tool_alt : Icons.brush),
               ),
             ),
+
+            // Criar uma nova nota de texto.
             IconButton.filledTonal(
               tooltip: 'Nova nota de texto',
               onPressed: _createTextNote,
               icon: const Icon(Icons.notes_rounded),
             ),
-            // moved 'Importar imagem' to AppBar to avoid overlap with audio FAB on small screens
+
             const Spacer(),
+            // Apagar página (com confirmação) e adicionar nova página.
             IconButton(
               tooltip: 'Remover página',
               onPressed: _pageCount > 1 ? _removeCurrentPage : null,
@@ -487,10 +531,12 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
         ),
       ),
 
+      // Corpo principal do ecrã: toolbar + área do papel com camadas de anotações.
       body: Stack(
         children: [
           Column(
             children: [
+              // Barra de ferramentas de anotação: controlos de modo, largura, cor, undo/redo, etc.
               Padding(
                 padding: const EdgeInsets.only(left: 8, right: 4, top: 4, bottom: 2),
                 child: AnnotationToolbar(
@@ -511,6 +557,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                   ownerIsNotebook: true,
                 ),
               ),
+              // Área expansível que contém o InteractiveViewer (zoom/pan) e o papel.
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
@@ -519,7 +566,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                       builder: (context, constraints) {
                         return InteractiveViewer(
                           transformationController: _ivController,
-                          // quando a caneta está a tocar, desativar pan para evitar que a caneta arraste
+
+                          // O pan fica desativado quando há contacto por caneta (ou se aceitamos mão).
                           panEnabled: !_stylusDown && (_stylusEverSeen ? true : _handMode),
                           minScale: 1.0,
                           maxScale: 5.0,
@@ -527,6 +575,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                           clipBehavior: Clip.hardEdge,
                           scaleEnabled: true,
                           onInteractionUpdate: (_) {
+                            // Atualiza escala corrente e recalcula rect do papel após interação.
                             _currentScale = _ivController.value.getMaxScaleOnAxis();
                             setState(() {});
                             WidgetsBinding.instance.addPostFrameCallback((_) => _updatePaperRect());
@@ -542,7 +591,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                               child: Stack(
                                 key: _paperKey,
                                 children: [
-                                  // “folha” branca
+
+                                  // A camada do 'papel': É apenas um background com sombra.
                                   Center(
                                     child: LayoutBuilder(
                                       builder: (_, c2) {
@@ -565,7 +615,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                       },
                                     ),
                                   ),
-                                  // Canvas — caneta desenha; dedos não
+
+                                  // Camada principal de desenho: DrawingCanvas recebe todos os strokes.
                                   Positioned.fill(
                                     child: IgnorePointer(
                                       ignoring: (!_stylusDown) && (_handMode || _canvasIgnore),
@@ -603,7 +654,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                       ),
                                     ),
                                   ),
-                                  // áudio
+
+                                  // Camada de pins de áudio.
                                   Positioned.fill(
                                     child: AudioPinLayer(
                                       notes: _audioNotes,
@@ -621,8 +673,8 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                       allowedBounds: _paperRect,
                                     ),
                                   ),
-                                  // pinos de notas
-                                  // imagens
+
+                                  // Camada de notas de imagem.
                                   ..._imageNotes.indexed.map((entry) {
                                     final idx = entry.$1;
                                     final note = entry.$2;
@@ -641,7 +693,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                     );
                                   }),
 
-                                  // pinos de notas (texto)
+                                  // Camada de notas de texto.
                                   ..._textNotes.indexed.map((entry) {
                                     final idx = entry.$1;
                                     final note = entry.$2;
@@ -669,6 +721,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
             ],
           ),
 
+          // Painel inferior para edição de notas.
           _NoteBottomSheet(
             visible: sheetOpen,
             controller: _noteEditor,
@@ -683,7 +736,16 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   }
 }
 
-/// Reutilizamos o mesmo widget do ficheiro do PDF
+// Pequeno painel inferior usado para editar o texto de uma nota.
+//
+// Comportamento e contrato:
+// - `visible`: controla se o painel está visível (animação de slide para dentro/fora).
+// - `controller`: controller do TextField usado para editar o texto.
+// - `onChanged`: callback invocado quando o texto muda (usado para persistir atualizações).
+// - `onClose`: fecha o painel sem apagar a nota.
+// - `onDelete`: função assíncrona chamada para apagar a nota atualmente editada.
+// - `bottomBarHeight`: altura da barra inferior do Scaffold (usada para deslocar o painel e evitar sobreposição).
+
 class _NoteBottomSheet extends StatelessWidget {
   const _NoteBottomSheet({
     required this.visible,
@@ -703,10 +765,18 @@ class _NoteBottomSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Altura inferior do ecrã que devemos considerar para não sobrepor controlos do sistema.
     final pad = MediaQuery.of(context).padding.bottom;
+    // Esquema de cores atual usado para o background.
     final base = Theme.of(context).colorScheme;
+    // Altura fixa do painel.
     const height = 140.0;
 
+    // Estrutura do widget:
+    // - Align/AnimatedSlide: posiciona e anima a entrada/saída do painel a partir de baixo.
+    // - Padding: desloca o painel para cima o suficiente para evitar a BottomAppBar + safe area.
+    // - Material: cartão elevado com borda arredondada para o visual do painel.
+    // - SizedBox/Padding/Column: conteúdo com título, ações e o TextField expansível.
     return Align(
       alignment: Alignment.bottomCenter,
       child: AnimatedSlide(
@@ -727,14 +797,17 @@ class _NoteBottomSheet extends StatelessWidget {
                   children: [
                     Row(
                       children: [
+                        // Ícone e título do painel.
                         const Icon(Icons.sticky_note_2_outlined, size: 18),
                         const SizedBox(width: 6),
                         const Expanded(child: Text('Nota', style: TextStyle(fontWeight: FontWeight.w600))),
+                        // Botão apagar.
                         IconButton(
                           tooltip: 'Apagar',
                           onPressed: () async => await onDelete(),
                           icon: const Icon(Icons.delete_outline_rounded),
                         ),
+                        // Botão fechar.
                         IconButton(
                           tooltip: 'Fechar',
                           onPressed: onClose,
@@ -743,6 +816,7 @@ class _NoteBottomSheet extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 6),
+                    // Campo de edição de texto.
                     Expanded(
                       child: TextField(
                         controller: controller,

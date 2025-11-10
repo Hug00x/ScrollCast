@@ -3,9 +3,39 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../models/annotations.dart';
 
+/*
+  drawing_canvas.dart
+
+  Propósito geral:
+  - Widget de desenho que fornece uma superfície para criar traços (strokes)
+    com suporte a caneta e dedo, bem como uma ferramenta de borracha
+    que corta traços existentes.
+  - Implementa toda a lógica de captura de ponteiros, aceita
+    múltiplos pointers para contagem/gestos, e expõe callbacks para o pai
+    persistir traços (onStrokeEnd) ou reagir a mudanças (onStrokesChanged).
+  - O build usa um `Listener` para receber eventos brutos de ponteiro e um
+    `CustomPaint` para desenhar os traços finalizados e pré-visualizações
+    em tempo real.
+
+  Observações de design:
+  - A borracha (eraser) não apenas apaga pontos mas pode 'cortar' um traço
+    em duas partes quando o ponto de corte ocorre no meio do traço.
+  - Esta implementação mantém a lógica de desenho separada do painter. O
+    `CustomPainter` é puramente declarativo: desenha com base no estado.
+*/
+
+
+// Tipo para notificar ao pai que um novo stroke foi finalizado e deve ser
+// persistido/encaixado na lista de strokes.
 typedef StrokeEnd = Future<void> Function(Stroke stroke);
+
+// Notifica o pai sobre o número atual de pointers em contacto. Útil para
+// decidir quando mostrar/ocultar controlos que dependem da contagem de dedos.
 typedef PointerCountChanged = void Function(int count);
 
+// Widget principal que encapsula a superfície de desenho.
+// - Renderiza os strokes existentes fornecidos pelo pai.
+// - Captura eventos de ponteiro e constrói um preview em tempo real.
 class DrawingCanvas extends StatefulWidget {
   final List<Stroke> strokes;
   final StrokeMode mode;
@@ -22,10 +52,10 @@ class DrawingCanvas extends StatefulWidget {
   /// Called once when the eraser interaction starts. Use to snapshot state for undo.
   final VoidCallback? onBeforeErase;
 
-  // >>> NOVO: se true, só caneta (stylus) pode desenhar; dedos são ignorados
+  // Se true, só caneta (stylus) pode desenhar; dedos são ignorados
   final bool stylusOnly;
 
-  // >>> NOVO: callback quando stylus toca/levanta
+  // Callback quando stylus toca/levanta
   final void Function(bool isDown)? onStylusContact;
 
   const DrawingCanvas({
@@ -48,20 +78,33 @@ class DrawingCanvas extends StatefulWidget {
 }
 
 class _DrawingCanvasState extends State<DrawingCanvas> {
-  final _activePoints = <int, Offset>{}; // pointer -> pos
-  // todos os pointers (aceites ou não) — usado para contar (p.ex. 2 dedos => zoom)
+
+  // Mapa de pointers atualmente ativos para desenho
+  // Apenas pointers aceites para desenhar (por exemplo, em stylusOnly dedos não
+  // entrarão aqui, mas serão contados em _allPoints).
+  final _activePoints = <int, Offset>{};
+
+  // Todos os pointers vistos (aceites ou não). Usado para notificar a contagem
+  // ao pai (p.ex. 2 dedos para zoom). Mantenho isto para separar contagem de
+  // entrada efetiva de desenho.
   final _allPoints = <int, Offset>{};
+
+  // Linha construída para o stroke em progresso quando há
+  // exatamente 1 pointer a desenhar. Resetada após completar o stroke.
   final _currentLine = <Offset>[];
 
-  // rastreia quais pointers são stylus
+  // Conjunto de pointers identificados como stylus para enviar eventos de
+  // contacto (onStylusContact) assim que todos levantarem/pousarem.
   final _stylusPointers = <int>{};
 
-  // preview da borracha
+  // Centro do preview da borracha (quando em modo eraser). Usado pelo painter
+  // para mostrar uma circunferência indicadora.
   Offset? _eraserCenter;
 
-  // raio base (caso não venha do toolbar)
+  // Raio padrão para a borracha quando o toolbar não forneceu um valor.
   static const double _fallbackEraserRadius = 18;
 
+  // Helper para notificar o pai sobre a contagem atual de pointers.
   void _notifyCount() => widget.onPointerCountChanged?.call(_allPoints.length);
 
 
@@ -79,30 +122,39 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
     return Listener(
       behavior: HitTestBehavior.opaque,
+      // Pointer down handler:
+      // - Regista se o pointer veio de uma stylus e notifica o pai quando a
+      //   stylus entra em contacto (onStylusContact(true)).
+      // - Mantém _allPoints para contar todos os pointers mesmo que não sejam
+      //   aceites para desenhar (ex.: modo stylusOnly). Se o pointer é aceite
+      //   para desenhar, adiciona-o a _activePoints e inicia a pré-visualização
+      //   do stroke ou da borracha.
       onPointerDown: (e) {
-        // marca stylus
+        // marca stylus e notifica contacto se aplicável
         if (_isStylus(e)) {
           _stylusPointers.add(e.pointer);
           widget.onStylusContact?.call(true);
         }
 
-        // sempre contar o pointer (p.ex., 2 dedos -> zoom), mesmo que não seja aceite para desenhar
+        // contar sempre para a lógica de HUD/gestos
         _allPoints[e.pointer] = e.localPosition;
         if (!_shouldAcceptDown(e)) {
           _notifyCount();
           return;
         }
 
-        // apenas pointers aceite para desenho vão para _activePoints
+        // pointer aceite para desenho
         _activePoints[e.pointer] = e.localPosition;
         _notifyCount();
 
         if (_activePoints.length == 1) {
+          // se apenas 1 pointer, começamos preview de stroke ou borracha
           if (isEraser) {
-            // inform the parent that erasing is about to start so it can snapshot for undo
+            // avisa o pai que a interacção de apagar vai começar (para  snapshotmde undo)
             widget.onBeforeErase?.call();
             _eraserCenter = e.localPosition;
           } else {
+            // iniciar a linha de pré-visualização
             _currentLine
               ..clear()
               ..add(e.localPosition);
@@ -111,31 +163,36 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         }
       },
       onPointerMove: (e) {
-        // atualiza posição de todos os pointers para contagem/HUD
+        // Move handler:
+        // - Atualiza _allPoints para manter contagem correta
+        // - Se o pointer foi aceite para desenho atualiza a sua posição em
+        //   _activePoints e altera o preview/eraser conforme apropriado.
         _allPoints[e.pointer] = e.localPosition;
 
-        // se o pointer não foi aceite (ex.: dedo em modo stylusOnly), ignora
         final wasAccepted = _activePoints.containsKey(e.pointer);
-        if (!wasAccepted && widget.stylusOnly) return;
+        if (!wasAccepted && widget.stylusOnly) return; // ignorar movimentos de dedos se só caneta
 
-        // actualiza posição apenas dos pointers aceite para desenho
         _activePoints[e.pointer] = e.localPosition;
 
         if (_activePoints.length == 1) {
+          // modo single-pointer => desenhar ou apagar
           if (isEraser) {
             _eraserCenter = e.localPosition;
-            _eraseAt(e.localPosition); // pode disparar onStrokesChanged
+            _eraseAt(e.localPosition); // operação de apagar/cortar
           } else {
             _currentLine.add(e.localPosition);
           }
           setState(() {});
         } else {
-          // 2+ dedos => não desenhar (deixa o InteractiveViewer trabalhar)
           _currentLine.clear();
         }
       },
       onPointerUp: (e) async {
-        // stylus up?
+        // Pointer up:
+        // - Se o pointer pertencia a uma stylus atualiza _stylusPointers e
+        //   notifica onStylusContact(false) quando não houver stylus ativos.
+        // - Remove o pointer de _activePoints e _allPoints e notifica o pai
+        //   sobre a nova contagem.
         if (_stylusPointers.remove(e.pointer) && _stylusPointers.isEmpty) {
           widget.onStylusContact?.call(false);
         }
@@ -144,10 +201,12 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         _allPoints.remove(e.pointer);
         _notifyCount();
 
+        // Se o pointer era responsável pelo stroke em progresso e houver pontos
+        // suficientes, acabar o stroke e avisar o pai (persistência/undo).
         if (wasAccepted && _currentLine.length > 1 && !isEraser) {
           final stroke = Stroke(
             points: List<Offset>.from(_currentLine),
-            width: widget.mode == StrokeMode.highlighter ? widget.strokeWidth * 1.35 : widget.strokeWidth,
+            width: widget.strokeWidth,
             color: widget.strokeColor,
             mode: widget.mode,
           );
@@ -160,6 +219,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         _eraserCenter = null;
       },
       onPointerCancel: (e) {
+        // Cancelamento abrupto: limpar estado relativo ao pointer
         _stylusPointers.remove(e.pointer);
         _activePoints.remove(e.pointer);
         _allPoints.remove(e.pointer);
@@ -190,6 +250,10 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       final s = widget.strokes[i];
       if (s.points.length < 2) continue;
 
+      // Lógica de corte da borracha:
+      // - Iteramos os segmentos do stroke e calculamos a distância do ponto
+      //   (where) ao segmento. Se estiver dentro do raio consideramos que
+      //   houve um corte e partimos o stroke em partes apropriadas.
       final newPoints = <Offset>[];
       bool cut = false;
 
@@ -199,12 +263,15 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         final d = _distancePointToSegment(where, a, b);
 
         if (d > radius) {
+          // segmento intacto: manter o ponto de começo
           newPoints.add(a);
         } else {
-          // corta aqui
+          // O ponto de borracha atingiu este segmento: efetuar corte
           cut = true;
           anyChange = true;
+
           if (newPoints.length >= 2) {
+            // Parte anterior tem pontos suficientes: mantenho como primeira parte
             widget.strokes[i] = Stroke(
               points: List<Offset>.from(newPoints),
               width: s.width,
@@ -213,12 +280,15 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
             );
             final rest = s.points.sublist(j + 1);
             if (rest.length >= 2) {
+              // Parte restante é válida: inserimos como novo stroke após o atual
               widget.strokes.insert(
                 i + 1,
                 Stroke(points: rest, width: s.width, color: s.color, mode: s.mode),
               );
             }
           } else {
+            // Não havia pontos suficientes antes do corte: a parte seguinte
+            // pode tornar-se o stroke atual ou removemos se inválida.
             final rest = s.points.sublist(j + 1);
             if (rest.length >= 2) {
               widget.strokes[i] = Stroke(points: rest, width: s.width, color: s.color, mode: s.mode);
@@ -231,7 +301,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       }
 
       if (!cut) {
-        // não houve corte no meio: manter último ponto (ainda assim altera o stroke)
+        // Se não houve corte, ainda assim atualizamos o stroke para manter a
+        // consistência da estrutura (mantemos o último ponto e marcamos
+        // alteração para disparar onStrokesChanged).
         newPoints.add(s.points.last);
         widget.strokes[i] = Stroke(points: newPoints, width: s.width, color: s.color, mode: s.mode);
         anyChange = true;
@@ -277,7 +349,8 @@ class _CanvasPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // strokes finalizados
+    // Desenhar todos os strokes já finalizados.
+    // Cada stroke é desenhado como várias linhas entre pontos consecutivos.
     for (final s in strokes) {
       if (s.points.length < 2) continue;
       final p = Paint()
@@ -285,13 +358,13 @@ class _CanvasPainter extends CustomPainter {
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..strokeWidth = s.width
-  ..color = Color(s.color).withAlpha(((s.mode == StrokeMode.highlighter ? 0.35 : 1.0) * 255).round());
+        ..color = Color(s.color);
       for (int i = 0; i < s.points.length - 1; i++) {
         canvas.drawLine(s.points[i], s.points[i + 1], p);
       }
     }
 
-    // traço em tempo real
+    // Desenhar o preview do stroke em progresso (se houver pelo menos 2 pontos)
     if (previewLine.length >= 2) {
       final p = Paint()
         ..style = PaintingStyle.stroke
@@ -304,7 +377,8 @@ class _CanvasPainter extends CustomPainter {
       }
     }
 
-    // preview da borracha
+    // Desenhar o indicador da borracha quando ativo: um círculo preenchido
+    // com um anel exterior para melhor visibilidade.
     if (showEraser && eraserCenter != null) {
       final fill = Paint()
         ..style = PaintingStyle.fill

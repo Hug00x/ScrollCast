@@ -1,4 +1,3 @@
-// lib/ui/screens/notebooks_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
@@ -8,6 +7,24 @@ import '../../main.dart';
 import '../../models/notebook_model.dart';
 import 'notebook_viewer_screen.dart';
 
+/*
+  NotebooksScreen
+
+  Propósito geral:
+  - Lista os cadernos do utilizador, permite filtrar por pasta, criar
+    novos cadernos, marcar favoritos e apagar cadernos existentes.
+  - Mantém um pequeno armazenamento local (Hive) para favoritos e usa o
+  - DatabaseService (via ServiceLocator) para listar/criar/apagar cadernos.
+
+  Organização do ficheiro:
+  - `NotebooksScreen`: widget com estado que gere a UI de listagem e os
+    fluxos de criação/apagamento.
+  - Usa uma box Hive por utilizador para guardar IDs favoritos.
+*/
+
+// ===== NotebooksScreen (widget) =====
+// Widget que apresenta a lista de cadernos do utilizador, filtros por
+// pasta, e acções para criar/apagar/abrir cadernos.
 class NotebooksScreen extends StatefulWidget {
   const NotebooksScreen({super.key});
   @override
@@ -15,12 +32,17 @@ class NotebooksScreen extends StatefulWidget {
 }
 
 class _NotebooksScreenState extends State<NotebooksScreen> {
+  // ===== Estado principal =====
+  // `_folder`: pasta selecionada (null = raiz("Sem Pasta")).
+  // `_folders`: lista de pastas disponíveis. `_items`: cadernos carregados.
+  // `_busy`: indica que uma operação longa está em curso (mostrado overlay).
   String? _folder; // filtro atual (null = raiz/"Sem Pasta")
   List<String> _folders = [];
   List<NotebookModel> _items = [];
   bool _busy = false;
 
   // ===== Favoritos de caderno (Hive local) =====
+  // Usamos uma box por utilizador para guardar IDs de favoritos.
   Box? _favBox;
   Set<String> _favIds = <String>{};
   StreamSubscription<BoxEvent>? _favWatchSub;
@@ -30,16 +52,19 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
   @override
   void initState() {
     super.initState();
+    // Inicialização do widget: abre a box de favoritos e carrega a lista
+    // de cadernos quando pronta. 
     _initFavs().then((_) => _reload());
   }
 
+  // Abre (ou obtém) a box Hive usada para favoritos e regista um watcher
+  // que reconstrói a UI quando a box muda. Também popula o set `_favIds` a partir das chaves.
   Future<void> _initFavs() async {
     _favBox = Hive.isBoxOpen(_favBoxName)
         ? Hive.box(_favBoxName)
         : await Hive.openBox(_favBoxName);
     _pullFavIds();
 
-    // Rebuild sempre que houver mudanças na box
     _favWatchSub?.cancel();
     _favWatchSub = _favBox!.watch().listen((_) {
       _pullFavIds();
@@ -47,10 +72,14 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     });
   }
 
+  // Extrai as chaves da box de favoritos e atualiza o Set `_favIds` para consultas rápidas na UI.
   void _pullFavIds() {
     _favIds = _favBox?.keys.whereType<String>().toSet() ?? <String>{};
   }
 
+  // Recarrega a lista de cadernos a partir do serviço de base de dados,
+  // aplicando o filtro de pasta atual. Atualiza também a lista de pastas
+  // disponíveis e ordena por `lastOpened` (mais recentes primeiro).
   Future<void> _reload() async {
     final db = ServiceLocator.instance.db;
 
@@ -73,6 +102,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     });
   }
 
+  // Mostra um diálogo para criar um novo caderno; se confirmado cria o
+  // `NotebookModel`, persiste-o e navega para o `NotebookViewerScreen`.
   Future<void> _newNotebook() async {
     final nameCtrl = TextEditingController();
     final folderCtrl = TextEditingController(text: _folder ?? '');
@@ -94,7 +125,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
       ),
     );
     if (ok != true) return;
-
+  
     final id = const Uuid().v4();
     final nb = NotebookModel(
       id: id,
@@ -107,7 +138,6 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
 
     await ServiceLocator.instance.db.upsertNotebook(nb);
     await _reload();
-
     if (!mounted) return;
     Navigator.push(
       context,
@@ -119,13 +149,16 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     ).then((_) => _reload());
   }
 
+  // Mostra uma confirmação e, se aceite, apaga o caderno (incluindo
+  // anotações, notas, áudios e imagens associadas). Remove também o ID da box de
+  // favoritos local e recarrega a lista.
   Future<void> _deleteNotebook(NotebookModel n) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Apagar caderno'),
         content: Text( 'Tens a certeza que queres apagar "${n.name}"?\n'
-          'Isto remove o caderno, as anotações e os áudios associados.',),
+          'Isto remove o caderno, as anotações, notas, áudios e imagens associadas.',),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
           FilledButton.tonal(onPressed: () => Navigator.pop(ctx, true), child: const Text('Apagar')),
@@ -137,10 +170,12 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     setState(() => _busy = true);
     await _favBox?.delete(n.id); // remove também dos favoritos
     await ServiceLocator.instance.db.deleteNotebook(n.id);
-    await _reload();
+    await _reload(); //recarrega lista após apagar
     if (mounted) setState(() => _busy = false);
   }
 
+  // Alterna o estado de favorito local para o caderno `n` gravando ou
+  // removendo a chave na box Hive. A UI é atualizada via watcher da box.
   Future<void> _toggleFavorite(NotebookModel n) async {
     if (_favBox == null) return;
     final isFav = _favIds.contains(n.id);
@@ -151,6 +186,8 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
     }
   }
 
+  // Gera um shader de gradiente usado no título dos itens para um visual
+  // mais vibrante quando favoritos ou no título principal.
   Shader _titleGradient(Rect bounds) {
     return const LinearGradient(
       colors: [
@@ -165,16 +202,23 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
 
   @override
   void dispose() {
+    // Cancela a subscrição da box de favoritos e limpa recursos.
     _favWatchSub?.cancel();
     super.dispose();
   }
 
   @override
+  // Monta a árvore da UI: chips de filtro no topo, lista de cadernos
+  // no corpo e um FAB para criar novos cadernos. Inclui um overlay de
+  // carregamento enquanto `_busy` está ativo.
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
   final Color unfavColor = cs.onSurfaceVariant.withAlpha((0.55 * 255).round());
-
-    final chips = <Widget>[
+  // ----- Chips de filtro de pasta -----
+  // Linha de chips horizontais que permite ao utilizador filtrar a
+  // lista por pasta. Inclui a opção 'Sem Pasta' para ver itens sem
+  // pasta atribuída.
+  final chips = <Widget>[
       ChoiceChip(
         label: const Text('Sem Pasta'),
         selected: _folder == null,
@@ -196,7 +240,6 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
           ),
         ),
     ];
-
     return Scaffold(
       appBar: AppBar(title: const Text('Cadernos')),
       body: Stack(
@@ -217,7 +260,12 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                         itemBuilder: (_, i) {
                           final n = _items[i];
                           final isFav = _favIds.contains(n.id);
+                          // ----- Item de caderno -----
+                          // Cada célula apresenta: ícone de favorito (toggle),
+                          // título com gradiente, subtítulo com meta-info (número de páginas),
+                          // tap para abrir e ações (apagar).
                           return ListTile(
+                            //Leading: ícone de favorito que permite toggle
                             leading: InkResponse(
                               onTap: () => _toggleFavorite(n),
                               radius: 24,
@@ -229,6 +277,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                                     )
                                   : Icon(Icons.star_border, size: 24, color: unfavColor),
                             ),
+                            // Title: aplica um gradiente e limita o texto a uma linha.
                             title: ShaderMask(
                               shaderCallback: _titleGradient,
                               blendMode: BlendMode.srcIn,
@@ -241,7 +290,10 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                                     ),
                               ),
                             ),
+                            // Subtitle: mostra contagem de páginas e a pasta onde o caderno se encontra.
                             subtitle: Text('${n.pageCount} páginas • ${n.folder ?? "raiz"}'),
+                            // onTap: abre o visualizador do caderno. Ao  regressar do visualizador
+                            // recarrega a lista para refletir alterações feitas.
                             onTap: () {
                               Navigator.push(
                                 context,
@@ -252,6 +304,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
                                 ),
                               ).then((_) => _reload());
                             },
+                            // Trailing: ações rápidas (apagar + chevron (apenas indicador visual)).
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -269,6 +322,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
               ),
             ],
           ),
+          // Overlay de carregamento.
           if (_busy)
             const Positioned.fill(
               child: IgnorePointer(
@@ -280,6 +334,7 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
             ),
         ],
       ),
+      // Botão flutuante para criar novo caderno
       floatingActionButton: FloatingActionButton.extended(
         heroTag: 'notebooks_new_fab',
         onPressed: _newNotebook,

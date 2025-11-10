@@ -4,7 +4,26 @@ import 'package:flutter/services.dart';
 import '../../models/annotations.dart';
 import '../../main.dart';
 
-// Forces input to uppercase (used for hex input)
+/*
+  annotation_toolbar.dart
+
+  Propósito geral:
+  - Este ficheiro fornece a toolbar de anotação usada no visualizador de PDFs/notebooks.
+  - Principais responsabilidades:
+    - Escolha de modo de traço (caneta / borracha).
+    - Seleção de cor (paleta rápida, picker detalhado e editor HEX).
+    - Controlo de largura do traço e largura da borracha.
+    - Ações de desfazer/refazer.
+    - Persistência das cores recentes por documento (PDF ou notebook) através do DatabaseService.
+
+  Organização do ficheiro:
+  - A toolbar é um widget stateless com callbacks para todas as ações para manter
+    a lógica de desenho fora do widget.
+  - Quando uma cor é escolhida, opcionalmente atualizamos o modelo do documento
+    (pdf ou notebook) para armazenar a lista `recentColors` — até 8 valores.
+  - O editor HEX abre um bottom sheet para inserir manualmente valores RRGGBB.
+*/
+
 class _UpperCaseTextFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
@@ -13,6 +32,13 @@ class _UpperCaseTextFormatter extends TextInputFormatter {
   }
 }
 
+// Formatter simples que força entrada em maiúsculas (usado no editor HEX)
+
+// Widget principal da toolbar de anotação.
+// - Recebe o estado atual (modo, cor, larguras) e expõe callbacks para que a
+//   lógica de desenho possa reagir às alterações.
+// - Tem integração com o DatabaseService para armazenar cores recentes
+//   por documento (quando `ownerId` for fornecido).
 class AnnotationToolbar extends StatelessWidget {
   const AnnotationToolbar({
     super.key,
@@ -40,7 +66,7 @@ class AnnotationToolbar extends StatelessWidget {
   final double width;
   final ValueChanged<double> onWidthChanged;
 
-  final int color; // ARGB
+  final int color;
   final ValueChanged<int> onColorChanged;
 
   final VoidCallback? onUndo;
@@ -55,6 +81,14 @@ class AnnotationToolbar extends StatelessWidget {
   final String? ownerId;
   final bool ownerIsNotebook;
 
+  // Abre um diálogo para escolher uma cor com o ColorPicker.
+  // Fluxo resumido:
+  // 1) Inicializa `temp` com a cor atual.
+  // 2) Mostra um AlertDialog com um `ColorPicker` e uma opção para abrir
+  //    o editor HEX.
+  // 3) Se o utilizador confirmar, chama onColorChanged com o ARGB selecionado.
+  // 4) Se `ownerId` estiver definido, insere a cor no histórico `recentColors`
+  //    do documento (notebook/pdf) e guarda (até 8 entradas).
   Future<void> _pickColor(BuildContext context) async {
     Color temp = Color(color);
     final picked = await showDialog<Color>(
@@ -62,17 +96,18 @@ class AnnotationToolbar extends StatelessWidget {
       builder: (ctx) {
         final controller = TextEditingController();
         String colorToHex(Color c) {
-          // return RRGGBB
-          final r = (c.red).toRadixString(16).padLeft(2, '0');
-          final g = (c.green).toRadixString(16).padLeft(2, '0');
-          final b = (c.blue).toRadixString(16).padLeft(2, '0');
+          final r = ((c.r * 255.0).round() & 0xff).toRadixString(16).padLeft(2, '0');
+          final g = ((c.g * 255.0).round() & 0xff).toRadixString(16).padLeft(2, '0');
+          final b = ((c.b * 255.0).round() & 0xff).toRadixString(16).padLeft(2, '0');
           return (r + g + b).toUpperCase();
         }
 
   controller.text = colorToHex(temp);
   controller.selection = TextSelection.fromPosition(TextPosition(offset: controller.text.length));
 
-        return StatefulBuilder(builder: (ctx2, setState) {
+  // StatefulBuilder permite alterar `temp` dentro do diálogo sem
+  // reconstruir todo o widget pai.
+  return StatefulBuilder(builder: (ctx2, setState) {
           void setTempFromHex(String text) {
             final hex = text.replaceAll('#', '').replaceAll(RegExp(r'[^0-9a-fA-F]'), '');
             if (hex.length >= 6) {
@@ -82,7 +117,6 @@ class AnnotationToolbar extends StatelessWidget {
                 final Color c = Color(0xFF000000 | val);
                 setState(() {
                   temp = c;
-                  // keep controller uppercase and limited to 6
                   if (controller.text.toUpperCase() != hex6) {
                     controller.value = TextEditingValue(
                       text: hex6,
@@ -93,10 +127,7 @@ class AnnotationToolbar extends StatelessWidget {
               } catch (_) {}
             }
           }
-
-          // When the user wants to edit the hex code we open a bottom sheet
-          // so the keyboard is handled by the sheet and doesn't push the dialog
-          // offscreen. The dialog itself stays fixed.
+          // Abre um bottom sheet para o utilizador inserir manualmente um código HEX
           Future<void> openHexEditor() async {
             final res = await showModalBottomSheet<String>(
               context: ctx2,
@@ -152,6 +183,8 @@ class AnnotationToolbar extends StatelessWidget {
             }
           }
 
+          // Diálogo principal de escolha de cor.
+          // Contém o picker visual e um botão que abre o editor HEX.
           return AlertDialog(
             title: const Text('Escolher cor'),
             content: SingleChildScrollView(
@@ -168,7 +201,7 @@ class AnnotationToolbar extends StatelessWidget {
                     },
                     enableAlpha: false,
                     portraitOnly: true,
-                    showLabel: false, // hide RGB/HSL fields
+                    labelTypes: const [],
                     pickerAreaBorderRadius: const BorderRadius.all(Radius.circular(12)),
                   ),
                   const SizedBox(height: 12),
@@ -222,11 +255,11 @@ class AnnotationToolbar extends StatelessWidget {
         });
       },
     );
-    if (picked != null) {
-      // convert Color to ARGB int
-      final int argb = picked.value & 0xFFFFFFFF;
+  // Se o utilizador escolheu uma cor (clicou OK), atualizamos o callback
+  // e guardamos a cor nas `recentColors` do documento.
+  if (picked != null) {
+      final int argb = picked.toARGB32();
       onColorChanged(argb);
-      // persist recent color for this document if we have an owner id
       if (ownerId != null) {
         try {
           final db = ServiceLocator.instance.db;
@@ -235,7 +268,7 @@ class AnnotationToolbar extends StatelessWidget {
             if (model != null) {
               final list = <int>[argb, ...model.recentColors.where((c) => c != argb)];
               final trimmed = list.take(8).toList();
-              await db.upsertNotebook(model.copyWith(lastOpened: model.lastOpened, lastPage: model.lastPage, lastColors: trimmed));
+              await db.upsertNotebook(model.copyWith(lastOpened: model.lastOpened, lastPage: model.lastPage, recentColors: trimmed));
             }
           } else {
             final model = await db.getPdfById(ownerId!);
@@ -249,12 +282,12 @@ class AnnotationToolbar extends StatelessWidget {
       }
     }
   }
-
+  
   @override
+
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isEraser = mode == StrokeMode.eraser;
-
     return Material(
       color: Colors.transparent,
       child: AnimatedOpacity(
@@ -265,14 +298,14 @@ class AnnotationToolbar extends StatelessWidget {
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(
-              // avoid deprecated `withOpacity` on Color; use withAlpha for equivalent effect
               color: scheme.surface.withAlpha((0.6 * 255).round()),
               borderRadius: BorderRadius.circular(14),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-            // LINHA 1 — modos + undo/redo + preview (com scroll horizontal p/ evitar overflow)
+            // Linha superior: botões de modo (caneta/borracha) + undo/redo
+            // Utilizamos um SingleChildScrollView horizontal para permitir overflow suave em ecrãs pequenos.
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
@@ -310,14 +343,13 @@ class AnnotationToolbar extends StatelessWidget {
             ),
 
             const SizedBox(height: 8),
-
-            // LINHA 2 — paleta + botão do espectro JUNTOS
+          //Linha inferior: paleta de cores + slider de largura
             _ColorPaletteWithPicker(
               selected: color,
               onChanged: (c) {
                 if (!enabled) return;
                 onColorChanged(c);
-                // persist recent color for owner
+
                 if (ownerId != null) {
                   () async {
                     try {
@@ -327,7 +359,7 @@ class AnnotationToolbar extends StatelessWidget {
                         if (model != null) {
                           final list = <int>[c, ...model.recentColors.where((x) => x != c)];
                           final trimmed = list.take(8).toList();
-                          await db.upsertNotebook(model.copyWith(lastOpened: model.lastOpened, lastPage: model.lastPage, lastColors: trimmed));
+                          await db.upsertNotebook(model.copyWith(lastOpened: model.lastOpened, lastPage: model.lastPage, recentColors: trimmed));
                         }
                       } else {
                         final model = await db.getPdfById(ownerId!);
@@ -344,7 +376,7 @@ class AnnotationToolbar extends StatelessWidget {
               onPickMore: () { if (enabled) _pickColor(context); },
               onOpenRecent: () {
                 if (!enabled || ownerId == null) return;
-                // open recent colors sheet
+
                 showModalBottomSheet<void>(
                   context: context,
                   builder: (ctx) => _RecentColorsSheet(ownerId: ownerId!, ownerIsNotebook: ownerIsNotebook, onSelect: (col) { if (enabled) onColorChanged(col); }),
@@ -355,7 +387,6 @@ class AnnotationToolbar extends StatelessWidget {
 
             const SizedBox(height: 4),
 
-            // LINHA 3 — espessura (pincel/borracha)
             Row(
               children: [
                 const Icon(Icons.horizontal_rule_rounded, size: 18),
@@ -378,8 +409,10 @@ class AnnotationToolbar extends StatelessWidget {
 );
   }
 }
-
 class _ModeButton extends StatelessWidget {
+  // Botão de modo (caneta / borracha) usado na barra superior.
+  // - Mostra um ícone e um label curto.
+  // - Quando `selected` é true aplica uma aparência destacada (border e cor primaria).
   const _ModeButton({
     required this.selected,
     required this.icon,
@@ -397,6 +430,7 @@ class _ModeButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // O efeito muda quando `selected` para sinalizar o estado ativo.
     return InkWell(
       onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(12),
@@ -457,14 +491,16 @@ class _ColorPaletteWithPicker extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
 
+    // A paleta ocupa uma altura fixa e apresenta os círculos de cor
+    // horizontalmente. Usamos ListView.separated para espaçamento consistente.
     return SizedBox(
       height: 36,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         physics: const BouncingScrollPhysics(),
         padding: const EdgeInsets.only(right: 4),
-        itemBuilder: (_, i) {
-          // virtual items: spectrum button and recent-colors button at the end
+  itemBuilder: (_, i) {
+          // O último índice depois da paleta padrão: botão para abrir o picker
           if (i == _colors.length) {
             return Tooltip(
               message: 'Mais cores…',
@@ -486,6 +522,7 @@ class _ColorPaletteWithPicker extends StatelessWidget {
               ),
             );
           }
+          // Botão para abrir o sheet de cores recentes
           if (i == _colors.length + 1) {
             return Tooltip(
               message: 'Cores recentes',
@@ -504,7 +541,6 @@ class _ColorPaletteWithPicker extends StatelessWidget {
               ),
             );
           }
-
           final c = _colors[i];
           final isSel = c == selected;
           return GestureDetector(
@@ -524,15 +560,12 @@ class _ColorPaletteWithPicker extends StatelessWidget {
           );
         },
   separatorBuilder: (_, _) => const SizedBox(width: 10),
-        itemCount: _colors.length + 2, // +1 para o botão de espectro +1 para o botão de cores recentes
+        itemCount: _colors.length + 2, 
       ),
     );
   }
 }
-
-// Note: preview painter removed because it wasn't referenced anywhere in the toolbar.
-// Keeping the file focused on the toolbar UI reduces unused-element analyzer hints.
-
+//Bottom sheet que mostra as cores recentes do documento (notebook/pdf)
 class _RecentColorsSheet extends StatefulWidget {
   const _RecentColorsSheet({required this.ownerId, required this.ownerIsNotebook, required this.onSelect});
 
@@ -552,7 +585,7 @@ class _RecentColorsSheetState extends State<_RecentColorsSheet> {
     super.initState();
     _load();
   }
-
+  //Carrega as cores recentes do documento (notebook/pdf) do DB
   Future<void> _load() async {
     try {
       final db = ServiceLocator.instance.db;
@@ -572,7 +605,8 @@ class _RecentColorsSheetState extends State<_RecentColorsSheet> {
       final db = ServiceLocator.instance.db;
       if (widget.ownerIsNotebook) {
         final m = await db.getNotebookById(widget.ownerId);
-        if (m != null) await db.upsertNotebook(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, lastColors: []));
+  // Ao limpar, gravamos o modelo com recentColors vazio (mantemos lastOpened/lastPage)
+  if (m != null) await db.upsertNotebook(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, recentColors: []));
       } else {
         final m = await db.getPdfById(widget.ownerId);
         if (m != null) await db.upsertPdf(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, recentColors: []));
@@ -594,7 +628,27 @@ class _RecentColorsSheetState extends State<_RecentColorsSheet> {
             Row(
               children: [
                 const Expanded(child: Text('Cores recentes', style: TextStyle(fontWeight: FontWeight.w600))),
-                IconButton(onPressed: _clearAll, icon: const Icon(Icons.delete_outline_rounded)),
+        
+                IconButton(
+                  tooltip: 'Limpar histórico',
+                  onPressed: () async {
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        title: const Text('Limpar histórico'),
+                        content: const Text('Tens a certeza que queres apagar o histórico?'),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancelar')),
+                          FilledButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Apagar')),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true) {
+                      await _clearAll();
+                    }
+                  },
+                  icon: const Icon(Icons.delete_sweep_rounded),
+                ),
                 IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(Icons.close_rounded)),
               ],
             ),
@@ -611,15 +665,15 @@ class _RecentColorsSheetState extends State<_RecentColorsSheet> {
                 children: _colors.map((c) {
                   return GestureDetector(
                     onTap: () async {
-                      // move selected to front and persist
                       final sel = c;
+                      final nav = Navigator.of(context);
                       try {
                         final db = ServiceLocator.instance.db;
                         if (widget.ownerIsNotebook) {
                           final m = await db.getNotebookById(widget.ownerId);
                           if (m != null) {
                             final list = <int>[sel, ...m.recentColors.where((x) => x != sel)];
-                            await db.upsertNotebook(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, lastColors: list.take(8).toList()));
+                            await db.upsertNotebook(m.copyWith(lastOpened: m.lastOpened, lastPage: m.lastPage, recentColors: list.take(8).toList()));
                           }
                         } else {
                           final m = await db.getPdfById(widget.ownerId);
@@ -629,8 +683,9 @@ class _RecentColorsSheetState extends State<_RecentColorsSheet> {
                           }
                         }
                       } catch (_) {}
+                      if (!mounted) return;
                       widget.onSelect(c);
-                      Navigator.pop(context);
+                      nav.pop();
                     },
                     child: Container(
                       width: 40,

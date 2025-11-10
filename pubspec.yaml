@@ -1,5 +1,5 @@
 name: scrollcast
-description: "PDF annotator with audio notes"
+description: "Anotador de PDFs e Cadernos com aúdios, notas e imagens"
 publish_to: 'none'
 version: 1.0.0+1
 

@@ -1,8 +1,22 @@
+/*
+  whatsapp_mic_button.dart
+
+  Propósito geral:
+  - Implementa um botão de gravação estilo WhatsApp: pressionar longo para
+    gravar e soltar para guardar.
+  - O widget trata permissões, gravação com a API `record`, e notifica o pai quando o ficheiro de áudio é guardado.
+
+  Comportamento UX:
+  - Long press start: inicia gravação.
+  - Long press end: termina a gravação e chama `onSaved`.
+*/
+
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 import 'package:path/path.dart' as p;
 
+// Tipo para notificar o pai quando um ficheiro de áudio é salvo.
 typedef OnAudioSaved = Future<void> Function(String filePath, int durationMs);
 
 class WhatsAppMicButton extends StatefulWidget {
@@ -20,23 +34,26 @@ class WhatsAppMicButton extends StatefulWidget {
 }
 
 class _WhatsAppMicButtonState extends State<WhatsAppMicButton> {
-  /// record ^6.x: usa AudioRecorder em vez de Record
+  // Usamos AudioRecorderç. Mantenho um wrapper leve aqui.
   final AudioRecorder _rec = AudioRecorder();
 
-  bool _recording = false;
-  late Offset _startPos;
+  // Estado visual/local
+  bool _recording = false; // indicador de gravação ativo
   Timer? _ticker;
   int _elapsedMs = 0;
 
   @override
   void dispose() {
+    // Cancelar timers e soltar recursos do recorder
     _ticker?.cancel();
-    _rec.dispose(); // boa prática
+    _rec.dispose(); 
     super.dispose();
   }
 
+  // Inicia a gravação: pede permissão, obtém o diretório para guardar e
+  // inicia o recorder com configuração adequada.
   Future<void> _start() async {
-    // record ^6.x mantém hasPermission()
+    // Verificar permissões de microfone
     if (!await _rec.hasPermission()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -46,11 +63,12 @@ class _WhatsAppMicButtonState extends State<WhatsAppMicButton> {
       return;
     }
 
+    // Obter diretório para guardar e compor um nome único para o ficheiro
     final dir = await widget.provideDirPath();
     final name = 'note_${DateTime.now().millisecondsSinceEpoch}.m4a';
     final out = p.join(dir, name);
 
-    // record ^6.x: start(RecordConfig, path: ...)
+    // Iniciar gravação com configuração razoável
     await _rec.start(
       const RecordConfig(
         encoder: AudioEncoder.aacLc,
@@ -60,6 +78,8 @@ class _WhatsAppMicButtonState extends State<WhatsAppMicButton> {
       path: out,
     );
 
+    // Reiniciar contadores e iniciar ticker que atualiza `_elapsedMs` para
+    // poder mostrar duração. Usamos mounted checks antes de setState.
     _elapsedMs = 0;
     _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (mounted) setState(() => _elapsedMs += 100);
@@ -67,40 +87,33 @@ class _WhatsAppMicButtonState extends State<WhatsAppMicButton> {
     if (mounted) setState(() => _recording = true);
   }
 
-  Future<void> _stop({required bool cancel}) async {
-    // record ^6.x: stop() devolve String? path
-    final path = await _rec.stop();
+  // Pára a gravação e notifica o pai com o ficheiro resultante (se houver).
+  // Removemos a lógica de cancelamento via drag: onLongPressEnd sempre termina
+  // a gravação e guarda o ficheiro quando presente.
+  Future<void> _stop() async {
+    final path = await _rec.stop(); // stop devolve String? path na v6.x
     _ticker?.cancel();
     final dur = _elapsedMs;
     if (mounted) setState(() => _recording = false);
 
-    if (!cancel && path != null) {
+    if (path != null) {
       await widget.onSaved(path, dur);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Gesture model:
+    // - onLongPressStart: regista a posição inicial e inicia gravação (_start)
+    // - onLongPressEnd: termina a gravação
     return GestureDetector(
       onLongPressStart: (d) async {
-        _startPos = d.globalPosition;
         await _start();
       },
-      onLongPressMoveUpdate: (m) {
-        final dx = m.globalPosition.dx - _startPos.dx;
-        // arrastar ~100px para a esquerda cancela
-        if (_recording && dx < -100) {
-          _stop(cancel: true);
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Gravação cancelada')),
-            );
-          }
-        }
-      },
       onLongPressEnd: (_) async {
-        if (_recording) await _stop(cancel: false);
+        if (_recording) await _stop();
       },
+      // Visual: botão circular com transição animada entre ícone de mic e stop
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 150),
         padding: const EdgeInsets.all(14),

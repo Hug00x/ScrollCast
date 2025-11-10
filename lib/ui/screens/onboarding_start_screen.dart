@@ -1,4 +1,21 @@
 // ui/screens/onboarding_start_screen.dart
+/*
+  OnboardingStartScreen
+
+  Propósito geral:
+  - Apresenta o ecrã inicial da aplicação para novos utilizadores.
+  - Verifica conectividade de rede, permite criar conta, entrar, ou
+    continuar como convidado.
+  - Observa o estado de autenticação para navegar automaticamente
+    para a Home se o utilizador já estiver autenticado.
+
+  Organização do ficheiro:
+  - `OnboardingStartScreen`: widget de estado que orquestra verificações
+    de conectividade, observação do auth, e navegação para os ecrãs
+    de autenticação / home.
+  - Implementa um "watcher" leve de conectividade (ping periódico)
+    para atualizar o UI sem bloquear o início.
+*/
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -18,35 +35,45 @@ class OnboardingStartScreen extends StatefulWidget {
 
 class _OnboardingStartScreenState extends State<OnboardingStartScreen>
     with WidgetsBindingObserver {
+  // ===== Estado básico =====
+  // `_checkingNet`: quando true mostramos um spinner na verificação manual inicial.
+  // `_online`: estado atual de conectividade (ping bem-sucedido).
+  // `_navigated`: evita múltiplas navegações concorrentes.
   bool _checkingNet = true;
   bool _online = true;
   bool _navigated = false;
 
+  // Subscrição do estado de autenticação: usada para reagir a logins que ocorram enquanto o ecrã está visível.
   StreamSubscription<String?>? _authSub;
 
-  // >>> NOVO: “watcher” de conectividade por ping periódico
+  //"watcher" de conectividade — timer periódico que faz pings leves para atualizar `_online` sem bloquear a UI.
   Timer? _netTimer;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-
-    // Se já está autenticado, segue para a Home.
+    // ===== Inicialização =====
+    // 1) Observador de ciclo de vida para pausar/retomar o watcher de rede.
+    // 2) Se já existir um UID válido, navegamos imediatamente para a Home.
+    // 3) Inscrevemo-nos nas mudanças de autenticação para reagir a logins
+    //    que ocorram a partir de outros ecrãs.
     final uid = ServiceLocator.instance.auth.currentUid;
     if (uid != null) {
+      // Se já está autenticado, entra imediatamente.
       _goHome();
     }
 
-    // Escuta auth: se fizer login via SignIn/Google, navega logo.
+    // Escuta mudanças de autenticação e navega automaticamente quando um UID válido é emitido.
     _authSub = ServiceLocator.instance.auth
         .authStateChanges()
         .listen((uid) {
       if (uid != null) _goHome();
     });
 
-    _checkConnectivity();   // 1ª verificação
-    _startLiveNetWatch();   // monitorização contínua
+    // Inicia verificação de conectividade seguida de um watcher periódico que atualiza o estado silenciosamente.
+    _checkConnectivity();
+    _startLiveNetWatch();
   }
 
   @override
@@ -57,9 +84,10 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
     super.dispose();
   }
 
-  // Pausa/retoma o watcher conforme o estado da app
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Quando a app volta do background, renovamos o watcher e forçamos uma verificação imediata.
+    // Quando a app fica em pausa/inativa, paramos o timer para poupar recursos.
     if (state == AppLifecycleState.resumed) {
       _startLiveNetWatch();
       _probeNet(); // força atualização imediata ao voltar
@@ -70,8 +98,8 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
     }
   }
 
-  // Verificação “manual” com spinner (mantida)
   Future<void> _checkConnectivity() async {
+    // Verificação manual com spinner: usada por botões e na inicialização.
     setState(() => _checkingNet = true);
     try {
       final res = await InternetAddress.lookup('example.com')
@@ -83,9 +111,9 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
       if (mounted) setState(() => _checkingNet = false);
     }
   }
-
-  // >>> NOVO: ping leve, sem spinner; só faz setState quando muda
   Future<void> _probeNet() async {
+    // Ping leve sem spinner. Só atualiza o estado se houver mudança para
+    // evitar re-renderizações desnecessárias quando a conectividade é estável.
     bool newOnline = _online;
     try {
       final res = await InternetAddress.lookup('example.com')
@@ -100,13 +128,15 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
     }
   }
 
-  // >>> NOVO: inicia/renova o timer periódico
   void _startLiveNetWatch() {
+    // Reinicia o timer periódico (3s) que chama `_probeNet`.
     _netTimer?.cancel();
     _netTimer = Timer.periodic(const Duration(seconds: 3), (_) => _probeNet());
   }
 
   void _goHome() {
+    // Navega para o HomeShell e remove toda a stack de navegação anterior.
+    // `_navigated` evita que a navegação seja disparada múltiplas vezes.
     if (_navigated || !mounted) return;
     _navigated = true;
     Navigator.of(context).pushAndRemoveUntil(
@@ -116,7 +146,8 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
   }
 
   Future<void> _enterGuest() async {
-    // Convidado: dados locais (DatabaseServiceImpl usa _anon quando não há UID).
+    // Entrar como convidado: a implementação do DatabaseService trata dados
+    // locais para utilizadores anónimos. Aqui simplesmente navegamos para a Home.
     _goHome();
   }
 
@@ -130,6 +161,10 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
 
   @override
   Widget build(BuildContext context) {
+    // ===== Build: árvore da UI =====
+    // O ecrã centra um cartão com o logo e três ações principais: criar
+    // conta, entrar e entrar como convidado. Há também um botão de estado
+    // de conectividade que permite re-disparar a verificação manual.
     final cs = Theme.of(context).colorScheme;
     final pad = MediaQuery.of(context).padding;
     final disabled = !_online || _checkingNet;
@@ -144,7 +179,8 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  // Logo (a tua imagem já tem título – não duplicamos)
+                  // ----- Logo -----
+                  // Container com decoração e a imagem e nome do logo.
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -156,7 +192,9 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
                   ),
                   const SizedBox(height: 32),
 
-                  // Criar conta
+                  // ----- Criar conta -----
+                  // Botão principal para registar uma nova conta. Se uma verificação inicial
+                  // de rede estiver em curso mostra um spinner em vez do texto.
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton(
@@ -168,7 +206,8 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
                   ),
                   const SizedBox(height: 12),
 
-                  // Entrar
+                  // ----- Entrar -----
+                  // Botão secundário para abrir o ecrã de login.
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.tonal(
@@ -178,7 +217,9 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
                   ),
                   const SizedBox(height: 12),
 
-                  // Convidado (texto sem borda)
+                  // ----- Entrar como Convidado -----
+                  // Permite usar a app sem autenticação; dados são mantidos
+                  // localmente pelo serviço de base de dados.
                   SizedBox(
                     width: double.infinity,
                     child: TextButton(
@@ -188,6 +229,9 @@ class _OnboardingStartScreenState extends State<OnboardingStartScreen>
                   ),
 
                   const SizedBox(height: 12),
+                  // ----- Estado de conectividade -----
+                  // Botão que mostra o estado atual e permite forçar
+                  // uma verificação manual ao ser tocado.
                   TextButton.icon(
                     onPressed: _checkConnectivity,
                     icon: Icon(_online ? Icons.wifi : Icons.wifi_off, color: cs.primary),
