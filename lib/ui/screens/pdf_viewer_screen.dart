@@ -85,7 +85,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
 
   // Controller do InteractiveViewer e flags derivadas.
   final _ivController = TransformationController();
-  bool _canvasIgnore = false;
   double _currentScale = 1.0;
 
   // Estado UI: `handMode` altera o comportamento de input para arrastar,
@@ -125,11 +124,13 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     final pdf = ServiceLocator.instance.pdf;
     final db = ServiceLocator.instance.db;
     final count = await pdf.getPageCount(widget.args.path);
+    if (!mounted) return;
     setState(() => _pageCount = count);
 
     // Tenta restaurar a última página guardada no modelo persistido.
     try {
       final model = await db.getPdfById(widget.args.pdfId);
+      if (!mounted) return;
       if (model != null) {
         final last = model.lastPage.clamp(0, math.max(0, count - 1)).toInt();
         _pageIndex = last;
@@ -138,12 +139,15 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
 
     // Assegura que a página inicial está renderizada e carrega anotações associadas.
     await _ensureRendered(_pageIndex);
+    if (!mounted) return;
     await _loadAnnotations(_pageIndex);
+    if (!mounted) return;
     setState(() => _loading = false);
   }
 
   @override
   void dispose() {
+    _ivController.dispose();
     _noteEditor.dispose();
     () async {
       try {
@@ -171,6 +175,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   Future<void> _loadAnnotations(int i) async {
     final db = ServiceLocator.instance.db;
     final ann = await db.getPageAnnotations(widget.args.pdfId, i);
+    if (!mounted) return;
     _strokes
       ..clear()
       ..addAll(ann?.strokes ?? const []);
@@ -189,7 +194,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     _ivController.value = Matrix4.identity();
     _currentScale = 1.0;
     _handMode = false;
-    _canvasIgnore = false;
+    _stylusDown = false;
 
     _openedNoteIndex = null;
     _noteEditor.clear();
@@ -203,6 +208,7 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   // Calcula a área do documento em coordenadas globais; o resultado é
   // usado pelas camadas de sobreposição para limitar posições.
   void _updatePaperRect() {
+    if (!mounted) return;
     final ctx = _paperKey.currentContext;
     final rb = ctx?.findRenderObject() as RenderBox?;
     if (rb == null) return;
@@ -233,7 +239,9 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
     if (i < 0 || i >= _pageCount || i == _pageIndex) return;
     await _savePage();
     await _ensureRendered(i);
+    if (!mounted) return;
     await _loadAnnotations(i);
+    if (!mounted) return;
     setState(() => _pageIndex = i);
   }
 
@@ -450,7 +458,6 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                     : () {
                         setState(() {
                           _handMode = !_handMode;
-                          _canvasIgnore = _handMode;
                         });
                       },
                 icon: Icon(_handMode ? Icons.pan_tool_alt : Icons.brush),
@@ -543,38 +550,37 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
                                   // Camada de desenho: recebe os strokes e expõe callbacks
                                   // usados para persistir alterações e registar snapshots de undo.
                                   Positioned.fill(
-                                    child: IgnorePointer(
-                                      ignoring: (!_stylusDown) && (_handMode || _canvasIgnore),
-                                      child: DrawingCanvas(
-                                        key: ValueKey('canvas-$_pageIndex'),
-                                        strokes: _strokes,
-                                        mode: _mode,
-                                        strokeWidth: _width,
-                                        strokeColor: _color,
-                                        stylusOnly: _stylusEverSeen,
-                                        onStrokeEnd: (s) async {
-                                          _pushUndoSnapshot();
-                                          setState(() => _strokes.add(s));
-                                          await _savePage();
-                                        },
-                                        onPointerCountChanged: (count) {
-                                          final ignore = (_handMode || count >= 2);
-                                          if (ignore != _canvasIgnore) setState(() => _canvasIgnore = ignore);
-                                        },
-                                        eraserWidthPreview: _eraserWidth,
-                                        onStrokesChanged: () async {
-                                          await _savePage();
-                                        },
-                                        onBeforeErase: () => _pushUndoSnapshot(),
-                                        onStylusContact: (down) {
-                                          if (down && !_stylusEverSeen) {
-                                            if (mounted) setState(() => _stylusEverSeen = true);
+                                    child: DrawingCanvas(
+                                      key: ValueKey('canvas-$_pageIndex'),
+                                      strokes: _strokes,
+                                      mode: _mode,
+                                      strokeWidth: _width,
+                                      strokeColor: _color,
+                                      stylusOnly: _stylusEverSeen,
+                                      touchDrawingEnabled: !_handMode,
+                                      onStrokeEnd: (s) async {
+                                        _pushUndoSnapshot();
+                                        setState(() => _strokes.add(s));
+                                        await _savePage();
+                                      },
+                                      eraserWidthPreview: _eraserWidth,
+                                      onStrokesChanged: () async {
+                                        await _savePage();
+                                      },
+                                      onBeforeErase: () => _pushUndoSnapshot(),
+                                      onStylusContact: (down) {
+                                        if (down && !_stylusEverSeen) {
+                                          if (mounted) {
+                                            setState(() {
+                                              _stylusEverSeen = true;
+                                              _handMode = false;
+                                            });
                                           }
-                                          if (down != _stylusDown) {
-                                            if (mounted) setState(() => _stylusDown = down);
-                                          }
-                                        },
-                                      ),
+                                        }
+                                        if (down != _stylusDown) {
+                                          if (mounted) setState(() => _stylusDown = down);
+                                        }
+                                      },
                                     ),
                                   ),
                                   // Camada de pinos de áudio.

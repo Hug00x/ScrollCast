@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../models/annotations.dart';
@@ -55,6 +56,9 @@ class DrawingCanvas extends StatefulWidget {
   // Se true, só caneta (stylus) pode desenhar; dedos são ignorados
   final bool stylusOnly;
 
+  // Keep listening for the pen even when fingers are used to pan/zoom.
+  final bool touchDrawingEnabled;
+
   // Callback quando stylus toca/levanta
   final void Function(bool isDown)? onStylusContact;
 
@@ -70,6 +74,7 @@ class DrawingCanvas extends StatefulWidget {
     this.onStrokesChanged,
     this.onBeforeErase,
     this.stylusOnly = false,
+    this.touchDrawingEnabled = true,
     this.onStylusContact,
   });
 
@@ -112,6 +117,10 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       e.kind == PointerDeviceKind.stylus || e.kind == PointerDeviceKind.invertedStylus;
 
   bool _shouldAcceptDown(PointerDownEvent e) {
+    if (!_isStylus(e) &&
+        (!widget.touchDrawingEnabled || _stylusPointers.isNotEmpty)) {
+      return false;
+    }
     if (!widget.stylusOnly) return true;
     return _isStylus(e); // em modo “só caneta”, ignora dedos
   }
@@ -130,8 +139,14 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       //   para desenhar, adiciona-o a _activePoints e inicia a pré-visualização
       //   do stroke ou da borracha.
       onPointerDown: (e) {
+        if (!mounted) return;
         // marca stylus e notifica contacto se aplicável
         if (_isStylus(e)) {
+          if (_stylusPointers.isEmpty) {
+            // A palm/finger that touched first must not block the pen.
+            _activePoints.clear();
+            _currentLine.clear();
+          }
           _stylusPointers.add(e.pointer);
           widget.onStylusContact?.call(true);
         }
@@ -146,6 +161,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         // pointer aceite para desenho
         _activePoints[e.pointer] = e.localPosition;
         _notifyCount();
+
+        if (_activePoints.length > 1) {
+          _currentLine.clear();
+          _eraserCenter = null;
+          setState(() {});
+          return;
+        }
 
         if (_activePoints.length == 1) {
           // se apenas 1 pointer, começamos preview de stroke ou borracha
@@ -163,6 +185,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         }
       },
       onPointerMove: (e) {
+        if (!mounted) return;
         // Move handler:
         // - Atualiza _allPoints para manter contagem correta
         // - Se o pointer foi aceite para desenho atualiza a sua posição em
@@ -170,7 +193,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         _allPoints[e.pointer] = e.localPosition;
 
         final wasAccepted = _activePoints.containsKey(e.pointer);
-        if (!wasAccepted && widget.stylusOnly) return; // ignorar movimentos de dedos se só caneta
+        if (!wasAccepted) return;
 
         _activePoints[e.pointer] = e.localPosition;
 
@@ -188,6 +211,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         }
       },
       onPointerUp: (e) async {
+        if (!mounted) return;
         // Pointer up:
         // - Se o pointer pertencia a uma stylus atualiza _stylusPointers e
         //   notifica onStylusContact(false) quando não houver stylus ativos.
@@ -200,6 +224,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         final wasAccepted = _activePoints.remove(e.pointer) != null;
         _allPoints.remove(e.pointer);
         _notifyCount();
+        if (!wasAccepted) return;
+        _eraserCenter = null;
 
         // Se o pointer era responsável pelo stroke em progresso e houver pontos
         // suficientes, acabar o stroke e avisar o pai (persistência/undo).
@@ -211,27 +237,32 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
             mode: widget.mode,
           );
           _currentLine.clear();
+          setState(() {});
           await widget.onStrokeEnd(stroke);
         } else {
           _currentLine.clear();
           setState(() {});
         }
-        _eraserCenter = null;
+        // No state changes after awaiting persistence: the route may be gone.
       },
       onPointerCancel: (e) {
+        if (!mounted) return;
         // Cancelamento abrupto: limpar estado relativo ao pointer
-        _stylusPointers.remove(e.pointer);
-        _activePoints.remove(e.pointer);
+        if (_stylusPointers.remove(e.pointer) && _stylusPointers.isEmpty) {
+          widget.onStylusContact?.call(false);
+        }
+        final wasAccepted = _activePoints.remove(e.pointer) != null;
         _allPoints.remove(e.pointer);
+        _notifyCount();
+        if (!wasAccepted) return;
         _currentLine.clear();
         _eraserCenter = null;
-        _notifyCount();
         setState(() {});
       },
       child: CustomPaint(
         painter: _CanvasPainter(
-          strokes: widget.strokes,
-          previewLine: _currentLine,
+          strokes: List<Stroke>.of(widget.strokes),
+          previewLine: List<Offset>.of(_currentLine),
           previewColor: widget.strokeColor,
           previewWidth: widget.strokeWidth,
           eraserCenter: _eraserCenter,
@@ -394,8 +425,8 @@ class _CanvasPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CanvasPainter old) =>
-      old.strokes != strokes ||
-      old.previewLine != previewLine ||
+      !listEquals(old.strokes, strokes) ||
+      !listEquals(old.previewLine, previewLine) ||
       old.previewColor != previewColor ||
       old.previewWidth != previewWidth ||
       old.showEraser != showEraser ||

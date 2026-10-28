@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import 'package:image_picker/image_picker.dart';
 import '../../main.dart';
 import '../../models/annotations.dart';
+import '../../models/notebook_model.dart';
+import '../widgets/notebook_paper.dart';
 import '../widgets/drawing_canvas.dart';
 import '../widgets/annotation_toolbar.dart';
 import '../widgets/whatsapp_mic_button.dart';
@@ -49,6 +51,7 @@ class NotebookViewerScreen extends StatefulWidget {
 class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   int _pageCount = 1;
   int _pageIndex = 0;
+  NotebookPaperStyle _paperStyle = NotebookPaperStyle.plain;
 
   final _strokes = <Stroke>[];
   final List<List<Stroke>> _undoStack = [];
@@ -65,7 +68,6 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   double _eraserWidth = 18;
 
   final _ivController = TransformationController();
-  bool _canvasIgnore = false;
   double _currentScale = 1.0;
   bool _handMode = false;
 
@@ -90,6 +92,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   // Limpeza de recursos: descarta o controller do editor e grava metadados.
   @override
   void dispose() {
+    _ivController.dispose();
     _noteEditor.dispose();
 
     // Persistência assíncrona do estado do caderno.
@@ -110,6 +113,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   Future<void> _initNotebook() async {
     final db = ServiceLocator.instance.db;
     final existing = await db.getAllAnnotations(_nbId);
+    if (!mounted) return;
     if (existing.isNotEmpty) {
       _pageCount = (existing.map((e) => e.pageIndex).fold<int>(0, (m, i) => i > m ? i : m)) + 1;
     } else {
@@ -118,7 +122,9 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
 
     try {
       final model = await db.getNotebookById(widget.args.notebookId);
+      if (!mounted) return;
       if (model != null) {
+        _paperStyle = model.paperStyle;
         _pageIndex = model.lastPage.clamp(0, math.max(0, _pageCount - 1)).toInt();
 
         if (model.pageCount != _pageCount) {
@@ -127,7 +133,9 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
       }
     } catch (_) {}
 
+    if (!mounted) return;
     await _loadPage(_pageIndex);
+    if (!mounted) return;
     setState(() {});
   }
 
@@ -136,6 +144,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
   Future<void> _loadPage(int i) async {
     final db = ServiceLocator.instance.db;
     final ann = await db.getPageAnnotations(_nbId, i);
+    if (!mounted) return;
     _strokes
       ..clear()
       ..addAll(ann?.strokes ?? const []);
@@ -154,7 +163,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     _ivController.value = Matrix4.identity();
     _currentScale = 1.0;
     _handMode = false;
-    _canvasIgnore = false;
+    _stylusDown = false;
 
     _openedNoteIndex = null;
     _noteEditor.clear();
@@ -181,6 +190,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
     if (i < 0 || i >= _pageCount || i == _pageIndex) return;
     if (saveCurrent) await _savePage();
     await _loadPage(i);
+    if (!mounted) return;
     setState(() => _pageIndex = i);
   }
   // Adiciona uma nova página ao final do caderno, guarda a atual e atualiza o modelo persistido.
@@ -415,6 +425,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
 
   // Atualiza o rect com os limites do papel no ecrã.
   void _updatePaperRect() {
+    if (!mounted) return;
     final ctx = _paperKey.currentContext;
     final rb = ctx?.findRenderObject() as RenderBox?;
     if (rb == null) return;
@@ -496,7 +507,6 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                     : () {
                         setState(() {
                           _handMode = !_handMode;
-                          _canvasIgnore = _handMode;
                         });
                       },
                 icon: Icon(_handMode ? Icons.pan_tool_alt : Icons.brush),
@@ -592,7 +602,7 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                 key: _paperKey,
                                 children: [
 
-                                  // A camada do 'papel': É apenas um background com sombra.
+                                  // O mesmo padrão de papel é usado em todas as páginas.
                                   Center(
                                     child: LayoutBuilder(
                                       builder: (_, c2) {
@@ -611,6 +621,10 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
                                               ),
                                             ],
                                           ),
+                                          child: ClipRRect(
+                                            borderRadius: BorderRadius.circular(8),
+                                            child: NotebookPaper(style: _paperStyle),
+                                          ),
                                         );
                                       },
                                     ),
@@ -618,40 +632,37 @@ class _NotebookViewerScreenState extends State<NotebookViewerScreen> {
 
                                   // Camada principal de desenho: DrawingCanvas recebe todos os strokes.
                                   Positioned.fill(
-                                    child: IgnorePointer(
-                                      ignoring: (!_stylusDown) && (_handMode || _canvasIgnore),
-                                      child: DrawingCanvas(
-                                        key: ValueKey('nb-canvas-$_pageIndex'),
-                                        strokes: _strokes,
-                                        mode: _mode,
-                                        strokeWidth: _width,
-                                        strokeColor: _color,
-                                        stylusOnly: _stylusEverSeen,
-                                        onStrokeEnd: (s) async {
-                                          _pushUndoSnapshot();
-                                          setState(() => _strokes.add(s));
-                                          await _savePage();
-                                        },
-                                        onPointerCountChanged: (count) {
-                                          final ignore = (_handMode || count >= 2);
-                                          if (ignore != _canvasIgnore) {
-                                            setState(() => _canvasIgnore = ignore);
+                                    child: DrawingCanvas(
+                                      key: ValueKey('nb-canvas-$_pageIndex'),
+                                      strokes: _strokes,
+                                      mode: _mode,
+                                      strokeWidth: _width,
+                                      strokeColor: _color,
+                                      stylusOnly: _stylusEverSeen,
+                                      touchDrawingEnabled: !_handMode,
+                                      onStrokeEnd: (s) async {
+                                        _pushUndoSnapshot();
+                                        setState(() => _strokes.add(s));
+                                        await _savePage();
+                                      },
+                                      eraserWidthPreview: _eraserWidth,
+                                      onStrokesChanged: () async {
+                                        await _savePage();
+                                      },
+                                      onBeforeErase: () => _pushUndoSnapshot(),
+                                      onStylusContact: (down) {
+                                        if (down && !_stylusEverSeen) {
+                                          if (mounted) {
+                                            setState(() {
+                                              _stylusEverSeen = true;
+                                              _handMode = false;
+                                            });
                                           }
-                                        },
-                                        eraserWidthPreview: _eraserWidth,
-                                        onStrokesChanged: () async {
-                                          await _savePage();
-                                        },
-                                        onBeforeErase: () => _pushUndoSnapshot(),
-                                        onStylusContact: (down) {
-                                          if (down && !_stylusEverSeen) {
-                                            if (mounted) setState(() => _stylusEverSeen = true);
-                                          }
-                                          if (down != _stylusDown) {
-                                            if (mounted) setState(() => _stylusDown = down);
-                                          }
-                                        },
-                                      ),
+                                        }
+                                        if (down != _stylusDown) {
+                                          if (mounted) setState(() => _stylusDown = down);
+                                        }
+                                      },
                                     ),
                                   ),
 

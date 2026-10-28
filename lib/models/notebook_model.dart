@@ -16,6 +16,17 @@ import 'dart:convert';
   - `recentColors` segue o mesmo formato do `PdfDocumentModel` para uniformidade na UI.
 */
 
+enum NotebookPaperStyle {
+  plain,
+  lined,
+  grid;
+
+  static NotebookPaperStyle fromStorage(Object? value) => values.firstWhere(
+        (style) => style.name == value,
+        orElse: () => plain,
+      );
+}
+
 class NotebookModel {
   // Identificador único do caderno.
   final String id;
@@ -38,6 +49,8 @@ class NotebookModel {
   // Histórico de cores recentes para a barra de ferramentas.
   final List<int> recentColors;
 
+  final NotebookPaperStyle paperStyle;
+
   const NotebookModel({
     required this.id,
     required this.name,
@@ -46,6 +59,7 @@ class NotebookModel {
     this.folder,
     this.lastPage = 0,
     this.recentColors = const [],
+    this.paperStyle = NotebookPaperStyle.plain,
   });
 
   // copyWith: permite criar uma nova instância com alguns campos modificados, preservando os restantes.
@@ -57,6 +71,7 @@ class NotebookModel {
     DateTime? lastOpened,
     int? lastPage,
     List<int>? recentColors,
+    NotebookPaperStyle? paperStyle,
   }) {
     return NotebookModel(
       id: id ?? this.id,
@@ -66,6 +81,7 @@ class NotebookModel {
       lastOpened: lastOpened ?? this.lastOpened,
       lastPage: lastPage ?? this.lastPage,
       recentColors: recentColors ?? this.recentColors,
+      paperStyle: paperStyle ?? this.paperStyle,
     );
   }
 
@@ -78,6 +94,7 @@ class NotebookModel {
         'lastOpened': lastOpened.millisecondsSinceEpoch,
         'lastPage': lastPage,
         'recentColors': recentColors,
+        'paperStyle': paperStyle.name,
       };
 
   // Desserialização a partir de Map: trata valores opcionais e defaults.
@@ -89,6 +106,7 @@ class NotebookModel {
         lastOpened: DateTime.fromMillisecondsSinceEpoch(map['lastOpened'] as int),
         lastPage: (map['lastPage'] as int?) ?? 0,
         recentColors: (map['recentColors'] as List?)?.map((e) => (e as int)).toList() ?? const [],
+        paperStyle: NotebookPaperStyle.fromStorage(map['paperStyle']),
       );
 
   // Helpers JSON para transporte ou persistência simples.

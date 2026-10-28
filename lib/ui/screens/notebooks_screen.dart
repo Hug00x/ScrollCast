@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../main.dart';
 import '../../models/notebook_model.dart';
+import '../widgets/new_notebook_dialog.dart';
 import 'notebook_viewer_screen.dart';
 
 /*
@@ -105,32 +106,18 @@ class _NotebooksScreenState extends State<NotebooksScreen> {
   // Mostra um diálogo para criar um novo caderno; se confirmado cria o
   // `NotebookModel`, persiste-o e navega para o `NotebookViewerScreen`.
   Future<void> _newNotebook() async {
-    final nameCtrl = TextEditingController();
-    final folderCtrl = TextEditingController(text: _folder ?? '');
-    final ok = await showDialog<bool>(
+    final draft = await showDialog<NotebookDraft>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Novo caderno'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Nome')),
-            TextField(controller: folderCtrl, decoration: const InputDecoration(labelText: 'Pasta (opcional)')),
-          ],
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Criar')),
-        ],
-      ),
+      builder: (_) => NewNotebookDialog(initialFolder: _folder),
     );
-    if (ok != true) return;
+    if (draft == null || !mounted) return;
   
     final id = const Uuid().v4();
     final nb = NotebookModel(
       id: id,
-      name: nameCtrl.text.trim().isEmpty ? 'Caderno' : nameCtrl.text.trim(),
-      folder: folderCtrl.text.trim().isEmpty ? null : folderCtrl.text.trim(),
+      name: draft.name,
+      folder: draft.folder,
+      paperStyle: draft.paperStyle,
       pageCount: 1,
       lastOpened: DateTime.now(),
       lastPage: 0,
